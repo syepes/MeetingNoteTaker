@@ -1,0 +1,157 @@
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.workflow }}-${{ github.ref }}
+  # Do not interrupt a tag build or its notarization/publishing steps.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    name: Test and build (Apple Silicon)
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      SWIFT_BUILD_JOBS: "2"
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Validate version and select release mode
+        env:
+          CONFIGURED_SIGNING: ${{ vars.MACOS_RELEASE_SIGNING || 'adhoc' }}
+        run: |
+          set -euo pipefail
+          mkdir -p .build/ci-logs
+          [ "$(uname -m)" = arm64 ]
+          source scripts/build-env.sh
+          xcodebuild -version
+          xcrun swift --version
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            VERSION="$(python3 scripts/release-version.py tag "$GITHUB_REF_NAME")"
+          else
+            VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Resources/Info.plist)"
+          fi
+          MODE=adhoc
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = tag ]; then
+            MODE="$CONFIGURED_SIGNING"
+          fi
+          case "$MODE" in adhoc|notarized) ;; *) echo 'MACOS_RELEASE_SIGNING must be adhoc or notarized'; exit 1 ;; esac
+          {
+            echo "APP_VERSION=$VERSION"
+            echo "BUILD_NUMBER=$GITHUB_RUN_NUMBER"
+            echo "RELEASE_SIGNING=$MODE"
+          } >> "$GITHUB_ENV"
+
+      - name: Check shell syntax
+        run: for script in scripts/*.sh; do bash -n "$script"; done
+
+      - name: Validate release metadata logic
+        run: python3 -m unittest discover -s Tests/ReleaseChecks -v
+
+      - name: Test core, menu, Settings, and shortcuts
+        run: bash scripts/test.sh 2>&1 | tee .build/ci-logs/tests.log
+
+      - name: Import signing certificate and notarization credentials
+        if: env.RELEASE_SIGNING == 'notarized'
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          NOTARY_KEY_BASE64: ${{ secrets.NOTARY_KEY_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: bash scripts/ci-signing.sh
+
+      - name: Build and verify app and bundled native engines
+        run: bash scripts/build-app.sh 2>&1 | tee .build/ci-logs/build.log
+
+      - name: Verify bundled worker protocol executable
+        run: |
+          set +e
+          dist/MeetingNoteTaker.app/Contents/Helpers/whisper-worker
+          STATUS=$?
+          set -e
+          [ "$STATUS" -eq 2 ]
+          lipo -verify_arch arm64 dist/MeetingNoteTaker.app/Contents/Helpers/whisper-worker
+          codesign --verify --strict dist/MeetingNoteTaker.app/Contents/Helpers/whisper-worker
+
+      - name: Package app (notarize when configured)
+        run: bash scripts/package-release.sh "v$APP_VERSION" 2>&1 | tee .build/ci-logs/package.log
+
+      - name: Upload packaged app and checksum
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-arm64-${{ github.sha }}
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Remove temporary signing material
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/meetingnotetaker-signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/meetingnotetaker-signing.keychain-db"
+          fi
+          rm -f "$RUNNER_TEMP/meetingnotetaker-certificate.p12" "$RUNNER_TEMP/meetingnotetaker-notary.p8" "$RUNNER_TEMP/MeetingNoteTaker-notary.zip"
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-logs-${{ github.sha }}
+          path: .build/ci-logs/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+
+  release:
+    name: Publish versioned GitHub release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: macos-arm64-${{ github.sha }}
+          path: release-assets
+
+      - name: Verify assets and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        working-directory: release-assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          ARCHIVE="MeetingNoteTaker-$RELEASE_TAG-macos-arm64.zip"
+          sha256sum --check "$ARCHIVE.sha256"
+          # Upload into a draft so a partial upload never becomes a public release.
+          # Failed draft uploads can be retried; published releases are immutable here.
+          if DRAFT="$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            [ "$DRAFT" = true ] || { echo 'This release is already published; create a new version tag.'; exit 1; }
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "MeetingNoteTaker $RELEASE_TAG" --generate-notes --notes-file release-notes.md
+          fi
+          gh release upload "$RELEASE_TAG" "$ARCHIVE" "$ARCHIVE.sha256" --clobber
+          gh release edit "$RELEASE_TAG" --draft=false

@@ -1,0 +1,19 @@
+.build/
+dist/
+build/
+.swiftpm/
+*.xcuserstate
+xcuserdata/
+
+### OS
+*.swp
+*~
+**/.DS_Store
+.DS_Store
+
+# Release helper caches and local signing material
+__pycache__/
+*.pyc
+*.p12
+*.p8
+*.keychain-db
