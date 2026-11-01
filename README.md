@@ -12,6 +12,7 @@ Turn conversations into a personal notebook. MeetingNoteTaker lives in your Macâ
 - Choose English, French or Spanish analysis output, and customize the prompts for each analysis type.
 - Save reusable profiles such as Technical review, Client call or Personal journal, with analysis preferences and tags.
 - Review formatted Markdown or its raw text, follow evidence links to transcript turns, and play back retained audio.
+- Search meeting filenames and contents locally, and move a meeting and its related files to macOS Trash.
 - Choose where notes are saved and how long audio is kept. Regenerate analysis even after audio is deleted.
 - Start recordings with keyboard shortcuts and recover interrupted work.
 

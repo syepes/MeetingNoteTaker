@@ -24,6 +24,7 @@ final class AppModel: ObservableObject {
     @Published var sessions: [MeetingSession] = []
     @Published private(set) var documentUpdateID = UUID()
     @Published var recording: MeetingSession?
+    @Published private(set) var deletingMeeting = false
     @Published var working = false
     @Published var progress = "Ready"
     @Published var error: String?
@@ -100,7 +101,7 @@ final class AppModel: ObservableObject {
             (captureHealth.microphone.droppedBuffers + captureHealth.computer.droppedBuffers > 0 ? " · \(captureHealth.microphone.droppedBuffers + captureHealth.computer.droppedBuffers) buffers dropped" : "")
     }
     func quit() {
-        guard recording == nil, !preparingRecording, !audioCheckRunning else { return }
+        guard !deletingMeeting, recording == nil, !preparingRecording, !audioCheckRunning else { return }
         Task { await coordinator.cancelAndWait(); NSApp.terminate(nil) }
     }
     func configureHotkey() {
@@ -141,7 +142,7 @@ final class AppModel: ObservableObject {
         recordingPaused.toggle()
     }
     func checkAudio() {
-        guard recording == nil, !working, !preparingRecording, !audioCheckRunning else { return }
+        guard !deletingMeeting, recording == nil, !working, !preparingRecording, !audioCheckRunning else { return }
         audioCheckRunning = true; audioCheckStatus = "Checking permissions and audio…"
         Task {
             let check = CoreAudioCapture(); check.microphoneEnabled = settings.microphoneEnabled
@@ -246,7 +247,7 @@ final class AppModel: ObservableObject {
     func refreshModels() async { do { models = try await modelManager.installed() } catch { self.error = error.localizedDescription } }
     func toggleRecording() { if recording != nil { stopRecording() } else { startRecording() } }
     func startRecording(profileID: UUID? = nil) {
-        guard recording == nil, !preparingRecording, !audioCheckRunning else { return }
+        guard !deletingMeeting, recording == nil, !preparingRecording, !audioCheckRunning else { return }
         let selectedProfile: MeetingProfileSnapshot
         do { selectedProfile = try resolveProfile(override: profileID) } catch { self.error = error.localizedDescription; return }
         let recordingSettings = settings
@@ -312,7 +313,8 @@ final class AppModel: ObservableObject {
         } else { capture?.microphoneEnabled = enabled }
     }
     func recoverSession(_ session: MeetingSession) {
-        guard !working, recording == nil, !preparingRecording, !audioCheckRunning, !memorySuspended else { return }; working = true; progress = "Recovering audio…"
+        guard session.deletionRequestedAt == nil else { return }
+        guard !deletingMeeting, !working, recording == nil, !preparingRecording, !audioCheckRunning, !memorySuspended else { return }; working = true; progress = "Recovering audio…"
         let token = coordinator.begin()
         job = Task {
             do { let result = try await pipeline.finalize(session, store: store); await reload(); guard coordinator.owns(token) else { return }; working = false; process(result, resume: true) }
@@ -320,8 +322,8 @@ final class AppModel: ObservableObject {
         }
     }
     private func resumeQueuedWork() {
-        guard !working, recording == nil, !preparingRecording, !audioCheckRunning, !memorySuspended else { return }
-        if let next = sessions.reversed().first(where: { $0.queuedForProcessing == true && ($0.status == .recorded || $0.status == .complete) }) {
+        guard !deletingMeeting, !working, recording == nil, !preparingRecording, !audioCheckRunning, !memorySuspended else { return }
+        if let next = sessions.reversed().first(where: { $0.deletionRequestedAt == nil && $0.queuedForProcessing == true && ($0.status == .recorded || $0.status == .complete) }) {
             process(next, resume: true)
         }
     }
@@ -336,7 +338,8 @@ final class AppModel: ObservableObject {
         if !Task.isCancelled || (memoryPausedJob && !memorySuspended) { memoryPausedJob = false; resumeQueuedWork() }
     }
     func process(_ original: MeetingSession, useCurrentSettings: Bool = false, resume: Bool = false) {
-        guard !working, recording == nil, !preparingRecording, !audioCheckRunning else { return }
+        guard original.deletionRequestedAt == nil else { return }
+        guard !deletingMeeting, !working, recording == nil, !preparingRecording, !audioCheckRunning else { return }
         let retryProfile: MeetingProfileSnapshot?
         do {
             // Retrying transcription keeps the recording's profile, including
@@ -384,8 +387,9 @@ final class AppModel: ObservableObject {
         }
     }
     func analyze(_ session: MeetingSession, kind: AnalysisKind? = nil, previewOnly: Bool = false, draft: String? = nil, profileID: UUID? = nil, useSavedProfile: Bool = false) {
-        guard !working, recording == nil, !preparingRecording, !audioCheckRunning else { return }
+        guard !deletingMeeting, !working, recording == nil, !preparingRecording, !audioCheckRunning else { return }
         guard !memorySuspended || settings.analysis.engine != .builtin else { progress = "Processing paused — waiting for memory pressure to clear"; return }
+        guard session.deletionRequestedAt == nil else { return }
         activeUsesLocalInference = settings.analysis.engine == .builtin
         let profile: MeetingProfileSnapshot
         do {
@@ -440,7 +444,7 @@ final class AppModel: ObservableObject {
     }
     func savePromptToggles() { /* Saved with the profile through Save Settings. */ }
     private func recover() async {
-        for var session in sessions {
+        for var session in sessions where session.deletionRequestedAt == nil {
             if session.status == .recording { session.status = .interrupted; session.error = "Recording was interrupted. Recover the saved audio from the meeting list."; try? await store.save(session) }
             else if session.status == .transcribing { session.status = .recorded; session.error = "Transcription was interrupted; resuming the saved job."; session.queuedForProcessing = true; try? await store.save(session) }
         }
@@ -453,15 +457,35 @@ final class AppModel: ObservableObject {
         try await store.save(updated); return updated
     }
     func cleanup() async {
-        guard recording == nil, !working, !preparingRecording else { return }
+        guard !deletingMeeting, recording == nil, !working, !preparingRecording else { return }
         do {
             let failures = try await store.cleanup(policy: settings.retention)
             if let first = failures.first { progress = "Cleanup deferred: \(first)" }
         } catch { progress = "Cleanup deferred: \(error.localizedDescription)" }
         await reload()
     }
-    func play(_ session: MeetingSession) { do { player?.stop(); player = try AVAudioPlayer(contentsOf: session.audioURL); player?.play() } catch { self.error = error.localizedDescription } }
+    func play(_ session: MeetingSession) { guard !deletingMeeting, session.deletionRequestedAt == nil else { return }; do { player?.stop(); player = try AVAudioPlayer(contentsOf: session.audioURL); player?.play() } catch { self.error = error.localizedDescription } }
     func stopPlayback() { player?.stop() }
+    var canDeleteMeeting: Bool {
+        !deletingMeeting && !working && recording == nil && !preparingRecording && !audioCheckRunning
+    }
+    func deleteMeeting(_ id: UUID) async -> Bool {
+        guard canDeleteMeeting, sessions.contains(where: { $0.id == id }) else { return false }
+        deletingMeeting = true
+        defer { deletingMeeting = false; resumeQueuedWork() }
+        stopPlayback(); player = nil; error = nil; progress = "Moving meeting to Trash…"
+        do {
+            try await store.trashMeeting(id)
+            await reload(); preview = ""; progress = "Meeting moved to Trash"
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            progress = "Deletion incomplete — retry in Meetings"
+            await reload()
+            return false
+        }
+    }
+
     func chooseFolder() {
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url { settings.outputFolder = url.path; saveSettings() }
@@ -532,7 +556,7 @@ final class AppModel: ObservableObject {
     }
     func cancelDownload() { modelJob?.cancel() }
     func removeModel(_ installed: InstalledModel) {
-        guard !working, recording == nil, !modelTaskRunning else { return }
+        guard !deletingMeeting, !working, recording == nil, !modelTaskRunning else { return }
         Task {
             do {
                 try await modelManager.remove(installed.url)

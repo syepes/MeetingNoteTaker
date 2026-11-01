@@ -58,3 +58,9 @@ Remote transcription sends audio to the configured endpoint. Remote analysis sen
 Add speech or analysis backends through the provider interfaces, keeping settings snapshots, cancellation, shutdown and error reporting intact. Extend model catalogs through model-management validation rather than bypassing download receipts or import checks. Keep Markdown evidence references stable when changing rendering or analysis.
 
 Preserve bounded capture buffering, overlapping speech, recoverable partial work and explicit ownership of deleted files. Hardware permissions, device changes and long-call synchronization require live testing beyond unit fixtures. See [Components](Components.md) for source ownership and [Development](Development.md) for validation commands.
+
+## Meeting deletion and search
+
+Meetings can be moved to macOS Trash from the detail header. SessionStore persists a deletion-pending marker, clears queued processing, validates exact owned paths and moves Markdown, audio, staging data and finally the history JSON. Partial failures remain visible for manual retry after restart. Pending/deleted records reject stale saves, and pending records are excluded from inference, recovery and retention. The UI blocks deletion during capture or processing, stops playback before deletion and blocks new work until it finishes. Shared models, settings and profiles are never included.
+
+The sidebar searches known meetings by filename, tags/profile name and current Markdown contents. Searches are debounced, cancellable and performed off the UI thread, with case/diacritic-insensitive terms. No database, persistent index or network is used. App updates and window focus refresh results; unreadable files are reported while filename matches remain available.

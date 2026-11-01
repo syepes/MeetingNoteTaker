@@ -33,19 +33,40 @@ struct MeetingNoteTakerApp: App {
 struct MeetingList: View {
     @EnvironmentObject var model: AppModel
     @State private var selected: UUID?
+    @State private var deletionCandidate: MeetingSession?
+    @State private var searchText = ""
+    @State private var searchMatches: Set<UUID> = []
+    @State private var searching = false
+    @State private var unreadableSearchFiles = 0
+    private var searchingQuery: Bool { !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var visibleSessions: [MeetingSession] { searchingQuery ? model.sessions.filter { searchMatches.contains($0.id) } : model.sessions }
+    private struct SearchRequest: Equatable { let query: String; let update: UUID }
+
     @StateObject private var documentReader = MeetingDocumentReader()
     @State private var analysisProfileChoice = ""
     @State private var viewerMode: MeetingViewerMode = .preview
     var current: MeetingSession? { model.sessions.first { $0.id == selected } }
     var body: some View {
         NavigationSplitView {
-            List(model.sessions, selection: $selected) { session in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(session.stem).font(.headline)
-                    HStack { Text(session.status.rawValue.capitalized); if session.audioDeleted { Image(systemName: "waveform.slash") }; if !session.analyses.isEmpty { Image(systemName: "sparkles") } }.font(.caption).foregroundStyle(.secondary)
-                }.padding(.vertical, 4).tag(session.id)
+            VStack(spacing: 0) {
+                TextField("Search meetings", text: $searchText)
+                    .textFieldStyle(.roundedBorder).padding(10)
+                    .accessibilityLabel("Search meeting filenames and contents")
+                if searching { ProgressView().controlSize(.small).padding(.bottom, 6) }
+                if unreadableSearchFiles > 0 && searchingQuery {
+                    Text("\(unreadableSearchFiles) files unavailable for content search").font(.caption).foregroundStyle(.secondary).padding(.horizontal, 10)
+                }
+                List(visibleSessions, selection: $selected) { session in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(session.stem).font(.headline)
+                        HStack { Text(session.deletionRequestedAt == nil ? session.status.rawValue.capitalized : "Deletion pending"); if session.audioDeleted { Image(systemName: "waveform.slash") }; if !session.analyses.isEmpty { Image(systemName: "sparkles") } }.font(.caption).foregroundStyle(.secondary)
+                    }.padding(.vertical, 4).tag(session.id)
+                }
+                .overlay {
+                    if searchingQuery && !searching && visibleSessions.isEmpty { Text("No matching meetings").foregroundStyle(.secondary) }
+                }
             }.navigationTitle("Meetings")
-            .toolbar { Button { model.toggleRecording() } label: { Label(model.recording == nil ? "Record" : "Stop", systemImage: model.recording == nil ? "record.circle" : "stop.circle") } }
+            .toolbar { Button { model.toggleRecording() } label: { Label(model.recording == nil ? "Record" : "Stop", systemImage: model.recording == nil ? "record.circle" : "stop.circle") }.disabled(model.deletingMeeting) }
         } detail: {
             if let session = current {
                 VStack(alignment: .leading, spacing: 12) {
@@ -54,6 +75,14 @@ struct MeetingList: View {
                         Spacer()
                         Button("Open Markdown") { NSWorkspace.shared.open(session.markdownURL) }
                         Button { NSWorkspace.shared.activateFileViewerSelecting([session.markdownURL]) } label: { Image(systemName: "folder") }
+                        Button { deletionCandidate = session } label: {
+                            Label(session.deletionRequestedAt == nil ? "Delete Meeting…" : "Retry deletion…", systemImage: "trash")
+                        }
+                        .labelStyle(.iconOnly)
+                        .help(session.deletionRequestedAt == nil ? "Delete Meeting…" : "Retry deletion…")
+                        .accessibilityLabel(session.deletionRequestedAt == nil ? "Delete Meeting…" : "Retry deletion…")
+                        .disabled(!model.canDeleteMeeting)
+
                     }
                     HStack {
                         if !session.audioDeleted && session.audioFingerprint != nil {
@@ -70,6 +99,7 @@ struct MeetingList: View {
                         }.disabled(model.working || model.recording != nil || session.firstSuccessfulExport == nil)
                         if model.working { Button("Cancel", action: model.cancelWork) }
                     }
+                    .disabled(model.deletingMeeting || session.deletionRequestedAt != nil)
                     Picker("Analysis profile", selection: $analysisProfileChoice) {
                         Text(session.profileSnapshot.map { saved in
                             model.profileCatalog?.profiles.first(where: { $0.id == saved.id }).map { "Assigned: \($0.name) · latest version" } ?? "Deleted profile: \(saved.name) — choose a replacement"
@@ -80,7 +110,7 @@ struct MeetingList: View {
                     if session.audioDeleted { Text("Audio deleted by retention policy. Analysis remains available from Markdown.").font(.caption).foregroundStyle(.secondary) }
                     if documentReader.document?.url == session.markdownURL, let hash = documentReader.document?.transcriptFingerprint, session.analyses.values.contains(where: { $0.transcriptFingerprint != hash }) { Label("Analysis is based on an older transcript. Regenerate to include your corrections.", systemImage: "arrow.clockwise").font(.caption).foregroundStyle(.orange) }
                     if let error = session.error { Text(error).font(.caption).foregroundStyle(.orange) }
-                    if session.status == .failed {
+                    if session.status == .failed && session.deletionRequestedAt == nil {
                         Text("Retry starts transcription again using the model currently selected in Settings. Your recording is preserved.").font(.caption).foregroundStyle(.secondary)
                     }
                     if let error = model.error { HStack { Text(error).foregroundStyle(.red).font(.caption); Button("Dismiss") { model.error = nil } } }
@@ -93,6 +123,34 @@ struct MeetingList: View {
                     OpenSettingsButton { Text("Configure models & settings…") }.buttonStyle(.borderedProminent)
                 }
             }
-        }.onAppear { UserDefaults.standard.set(true, forKey: "hasOpenedNotebook"); Task { await model.reload() } }
+        }
+        .task(id: SearchRequest(query: searchText, update: model.documentUpdateID)) {
+            guard searchingQuery else { searching = false; unreadableSearchFiles = 0; return }
+            searching = true
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+                let result = try await MeetingSearch.search(searchText, sessions: model.sessions)
+                try Task.checkCancellation()
+                searchMatches = result.ids; unreadableSearchFiles = result.unreadableFiles; searching = false
+            } catch { if !Task.isCancelled { searching = false } }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
+            guard let window = notification.object as? NSWindow, window.identifier?.rawValue == "meetings" else { return }
+            Task { await model.reload() }
+        }
+        .alert("Move meeting to Trash?", isPresented: Binding(get: { deletionCandidate != nil }, set: { if !$0 { deletionCandidate = nil } }), presenting: deletionCandidate) { candidate in
+            Button("Cancel", role: .cancel) { deletionCandidate = nil }.keyboardShortcut(.defaultAction)
+            Button("Move to Trash", role: .destructive) {
+                deletionCandidate = nil
+                Task {
+                    if await model.deleteMeeting(candidate.id), selected == candidate.id {
+                        selected = nil; documentReader.clear()
+                    }
+                }
+            }.disabled(!model.canDeleteMeeting)
+        } message: { candidate in
+            Text("“\(candidate.stem)” and its transcript, personal notes, analyses, audio, recovery files and meeting history will move to macOS Trash.")
+        }
+        .onAppear { UserDefaults.standard.set(true, forKey: "hasOpenedNotebook"); Task { await model.reload() } }
     }
 }

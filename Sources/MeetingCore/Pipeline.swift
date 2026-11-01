@@ -24,6 +24,7 @@ public actor MeetingPipeline {
     public init(speechFactory: @escaping @Sendable (SpeechSettings) throws -> any TranscriptionProvider = { try SpeechProviders.make($0) }, analysisFactory: @escaping @Sendable (AnalysisSettings) -> any AnalysisProvider = { ChatAnalysisProvider($0) }) { self.analysisFactory = analysisFactory; self.speechFactory = speechFactory }
     public func cancel() { speechProvider?.cancel(); analysisProvider?.cancel() }
     public func finalize(_ original: MeetingSession, store: SessionStore) async throws -> MeetingSession {
+        guard original.deletionRequestedAt == nil else { throw MeetingError.message("This meeting is pending deletion.") }
         var session = original
         let journal = try CaptureEventJournal.replay(session.stagingURL)
         if !journal.isEmpty {
@@ -40,6 +41,7 @@ public actor MeetingPipeline {
         try await store.save(session); try MarkdownExporter.updateMetadata(session); return session
     }
     public func transcribe(_ original: MeetingSession, store: SessionStore, attempt: TranscriptionAttempt = .resume, progress: @escaping @Sendable (String) async -> Void) async throws -> MeetingSession {
+        guard original.deletionRequestedAt == nil else { throw MeetingError.message("This meeting is pending deletion.") }
         var session = attempt.prepare(original)
         guard !session.audioDeleted else { throw MeetingError.message("The audio has been deleted. You can still regenerate analysis from Markdown.") }
         session.status = .transcribing; session.error = nil; try await store.save(session)
@@ -96,6 +98,7 @@ public actor MeetingPipeline {
         }
     }
     public func analyze(_ original: MeetingSession, settings: AnalysisSettings, definitions: [AnalysisDefinition], store: SessionStore, preview: Bool = false, progress: @escaping @Sendable (String) async -> Void) async throws -> (MeetingSession, [AnalysisResult]) {
+        guard original.deletionRequestedAt == nil else { throw MeetingError.message("This meeting is pending deletion.") }
         var session = original
         let segments = try MarkdownExporter.readTranscript(session.markdownURL)
         let provider = analysisFactory(settings); analysisProvider = provider

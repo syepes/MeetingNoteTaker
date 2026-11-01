@@ -16,6 +16,10 @@ import Combine
     }
     init(read: @escaping @Sendable (URL) async throws -> MeetingDocument) { self.read = read }
 
+    public func clear() {
+        requestID = UUID(); selectedURL = nil; document = nil; error = nil; isLoading = false
+    }
+
     public func load(_ url: URL) async {
         let id = UUID(); requestID = id
         if selectedURL != url { document = nil; selectedURL = url; error = nil }

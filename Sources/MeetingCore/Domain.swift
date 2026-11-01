@@ -191,6 +191,7 @@ public struct MeetingSession: Codable, Identifiable, Sendable {
     public var events: [CaptureEvent] = []
     public var analyses: [AnalysisKind: AnalysisResult] = [:]
     public var firstSuccessfulExport: Date?
+    public var deletionRequestedAt: Date?
     public var audioDeleted = false
     public var audioFingerprint: String?
     public var error: String?
