@@ -4,6 +4,7 @@ build/
 .swiftpm/
 *.xcuserstate
 xcuserdata/
+video/
 
 ### OS
 *.swp

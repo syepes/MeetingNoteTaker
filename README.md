@@ -16,6 +16,12 @@ Turn conversations into a personal notebook. MeetingNoteTaker lives in your Macâ
 - Choose where notes are saved and how long audio is kept. Regenerate analysis even after audio is deleted.
 - Start recordings with keyboard shortcuts and recover interrupted work.
 
+
+## Demo
+
+![MeetingNoteTaker demo: real app screens showing meeting notes, transcript evidence, Markdown, and local or remote model choices](Docs/assets/meetingnotetaker-demo.gif)
+
+
 ## How to use
 
 1. Open **MeetingNoteTaker.app** and click its menu bar icon. Open **Settings** to get started.
