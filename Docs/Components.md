@@ -27,7 +27,7 @@ TranscriptionProvider and AnalysisProvider are the main inference extension poin
 
 Parakeet additionally implements `InMemoryTranscriptionProvider`, accepting mono 16 kHz floating-point samples with source, meeting offset and chunk duration. Its file entry point delegates to the same decoder-state and result-conversion path. Model preparation remains offline through `AsrModels.loadLocal`; downloads remain explicit model-management actions.
 
-FluidAudio is pinned to **0.18.0** (`e15287985625dbf544a343df679436789ffb03fb`) with `traits: []`. This excludes optional TTS, Diarizer and NeMo text-normalization code/resources while retaining ASR/VAD. Swift tools 6.2+ are required for dependency traits; the app retains Swift 5 language mode, Xcode 27 and the macOS 26 deployment target.
+FluidAudio is pinned to **0.18.2** (`e396cf780c4abf8e395087467c0585d3b0d17f68`) with `traits: []`. This excludes optional TTS, Diarizer and NeMo text-normalization code/resources while retaining ASR/VAD. Swift tools 6.2+ are required for dependency traits; the app retains Swift 5 language mode, Xcode 27 and the macOS 26 deployment target.
 
 ## Change and validation guide
 

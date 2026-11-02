@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS("26.0")],
     products: [.executable(name: "MeetingNoteTaker", targets: ["MeetingNoteTaker"])],
     dependencies: [
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.18.0", traits: []),
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.18.2", traits: []),
         .package(url: "https://github.com/swiftlang/swift-markdown.git", exact: "0.9.0")
     ],
     targets: [

@@ -50,7 +50,7 @@ Documentation-only changes need source/link review rather than an app rebuild. U
 
 ### FluidAudio ASR-only builds
 
-The package uses Swift tools 6.2 dependency traits to pin FluidAudio 0.18.0 with no optional traits. When upgrading an existing checkout, obsolete `CNemoTextProcessing` headers in `.build/out/Products/{Debug,Release}/include` can make `canImport` succeed even though NeMo is no longer linked. Remove these generated header directories and run `swift package clean` before rebuilding if unresolved `_nemo_*` symbols appear. Do not change dependency sources or re-enable NeMo to mask stale output.
+The package uses Swift tools 6.2 dependency traits to pin FluidAudio 0.18.2 with no optional traits. When upgrading an existing checkout, obsolete `CNemoTextProcessing` headers in `.build/out/Products/{Debug,Release}/include` can make `canImport` succeed even though NeMo is no longer linked. Remove these generated header directories and run `swift package clean` before rebuilding if unresolved `_nemo_*` symbols appear. Do not change dependency sources or re-enable NeMo to mask stale output.
 
 `InMemoryTranscriptionTests` covers direct samples, file fallback/cleanup, source offsets, partial chunks, echo ordering, silence, cancellation and checkpoint recovery. `ParakeetSampleIntegrationTests` checks the ASR-only configuration and provides offline file/sample comparisons for installed models. Supply `MNT_PARAKEET_V2_MODEL`, `MNT_PARAKEET_V3_MODEL` or `MNT_PARAKEET_ULTRA_MODEL` plus `MNT_TEST_AUDIO`; multilingual checks also require `MNT_FRENCH_TEST_AUDIO`. Missing fixtures produce explicit skips. These tests never download models and do not measure transcription speed.
 
