@@ -15,7 +15,16 @@ bool mnt_ring_push(MNTRing *r, const float *const *channels, uint32_t n, uint32_
     if (next == r->read.load(std::memory_order_acquire) || frames > MNT_MAX_FRAMES || !n) { r->dropped++; return false; }
     auto &p=r->packets[w]; p.time=time; p.rate=rate; p.count=frames; muted = muted || r->muted.load(std::memory_order_relaxed);
     double pauseStart=r->pauseStart.load(), pauseEnd=r->pauseEnd.load();
+    const double lastTime = time + (frames-1)/rate;
+    const bool overlaps = pauseStart>=0 && lastTime>=pauseStart && (pauseEnd<0 || time<pauseEnd);
+    const bool fullyPaused = overlaps && time>=pauseStart && (pauseEnd<0 || lastTime<pauseEnd);
+    if(muted || fullyPaused) std::memset(p.samples, 0, frames*sizeof(float));
+    else if(!overlaps && n==1 && stride==1) std::memcpy(p.samples, channels[0], frames*sizeof(float));
+    else if(!overlaps) {
+        for(uint32_t i=0;i<frames;i++){ float x=0; for(uint32_t c=0;c<n;c++) x+=channels[c][i*stride]; p.samples[i]=x/n; }
+    } else {
     for(uint32_t i=0;i<frames;i++){ double t=time+i/rate; bool paused=pauseStart>=0 && t>=pauseStart && (pauseEnd<0 || t<pauseEnd); float x=0; if(!muted && !paused) for(uint32_t c=0;c<n;c++) x+=channels[c][i*stride]; p.samples[i]=x/n; }
+    }
     r->write.store(next,std::memory_order_release); return true;
 }
 bool mnt_ring_pop(MNTRing *r, MNTPacket *p) {

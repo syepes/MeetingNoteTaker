@@ -5,6 +5,7 @@ import SwiftUI
 // isolated model exercises their layout without audio, inference, or user files.
 @MainActor
 final class AppModel: ObservableObject {
+    var recordingMetersVisible = false
     struct Settings {
         var microphoneEnabled = true
         var outputFolder = "/tmp"
@@ -71,6 +72,11 @@ struct MenuLayoutChecks {
             print("PASS \(name): \(Int(actual.height)) pt, no excess height")
         }
 
+        panel.orderFront(nil); settle()
+        precondition(model.recordingMetersVisible, "Visible menu must enable recording meters")
+        panel.orderOut(nil); settle()
+        precondition(!model.recordingMetersVisible, "Hidden menu must disable recording meters")
+        print("Passed menu visibility/meter gating checks.")
         check("initial oversized panel")
         let idleHeight = panel.frame.height
         for cycle in 1...3 {

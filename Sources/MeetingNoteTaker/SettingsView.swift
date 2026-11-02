@@ -26,7 +26,6 @@ struct SettingsView: View {
 }
 struct GeneralSettings: View {
     @EnvironmentObject var model: AppModel
-    @State private var login = SMAppService.mainApp.status == .enabled
     var body: some View {
         Form {
             Section("Recording") {
@@ -47,7 +46,7 @@ struct GeneralSettings: View {
                 Toggle("Record microphone", isOn: Binding(get: { model.settings.microphoneEnabled }, set: model.setMicrophone))
             }
             Section("Behavior") {
-                Toggle("Launch at login", isOn: $login).onChange(of: login) { _, value in model.setLogin(value) }
+                Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: model.setLogin))
                 Picker("Recording shortcut", selection: $model.settings.shortcutKeyCode) {
                     Text("⌘⌥R").tag(UInt32(15)); Text("⌘⌥M").tag(UInt32(46)); Text("⌘⌥Space").tag(UInt32(49))
                 }
@@ -62,8 +61,10 @@ struct GeneralSettings: View {
                 Text(model.audioCheckStatus.isEmpty ? "Checks permissions, audio sources and free disk space. No recording or transcript is saved." : model.audioCheckStatus).font(.caption).foregroundStyle(.secondary)
             }
             Section("Permissions") {
-                Text("Microphone and System Audio Recording access are requested when you first record. Screen video is never saved.")
                 Button("Open Privacy & Security") { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy")!) }
+                Text("Microphone and System Audio Recording access are requested when you first record. Screen video is never saved.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }.formStyle(.grouped)
     }

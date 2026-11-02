@@ -6,6 +6,7 @@ import MeetingCore
 
 @MainActor
 final class AppModel: ObservableObject {
+    @Published private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled
     @Published var settings = AppSettings()
     @Published var modelSection: ModelSection = .transcription
     @Published var analysisModelDraft = AnalysisSettings()
@@ -28,6 +29,7 @@ final class AppModel: ObservableObject {
     @Published var working = false
     @Published var progress = "Ready"
     @Published var error: String?
+    var recordingMetersVisible = false { didSet { capture?.metersEnabled = recordingMetersVisible } }
     @Published var microphoneLevel: Float = 0
     @Published var computerLevel: Float = 0
     @Published var startedAt: Date?
@@ -90,6 +92,7 @@ final class AppModel: ObservableObject {
         hotkey = GlobalHotkey { [weak self] in Task { @MainActor in self?.toggleRecording() } }
         profileHotkey = GlobalHotkey(id: 2) { [weak self] in Task { @MainActor in self?.showProfileChooser() } }
         configureHotkey()
+        configureDefaultLogin()
         Task { appleLocales = await ModelManager.appleLocales(); installedAppleLocales = await ModelManager.installedAppleLocales() }
         Task { await reload(); await refreshModels(); await recover(); await cleanup(); resumeQueuedWork() }
         retentionTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in Task { @MainActor in await self?.cleanup() } }
@@ -267,7 +270,8 @@ final class AppModel: ObservableObject {
                 try await store.save(session)
                 let capture = CoreAudioCapture(); self.capture = capture
                 capture.microphoneEnabled = settings.microphoneEnabled
-                capture.onLevels = { [weak self] mic, computer in Task { @MainActor in self?.microphoneLevel = mic; self?.computerLevel = computer } }
+                capture.metersEnabled = recordingMetersVisible
+                capture.onLevels = { [weak self] mic, computer in self?.microphoneLevel = mic; self?.computerLevel = computer }
                 capture.onHealth = { [weak self] health in
                     guard let self, self.coordinator.owns(token) else { return }
                     self.captureHealth = health; self.progress = health.summary
@@ -584,5 +588,19 @@ final class AppModel: ObservableObject {
             catch { self.error = error.localizedDescription }
         }
     }
-    func setLogin(_ enabled: Bool) { do { if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } } catch { self.error = error.localizedDescription } }
+    private func configureDefaultLogin() {
+        let key = "launchAtLoginDefaultConfigured"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        // Existing installations keep their macOS login-item choice, including opt-outs.
+        guard !FileManager.default.fileExists(atPath: persistence.root.appendingPathComponent("settings.json").path),
+              SMAppService.mainApp.status == .notRegistered else { return }
+        setLogin(true)
+    }
+    func setLogin(_ enabled: Bool) {
+        do {
+            if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+        } catch { self.error = error.localizedDescription }
+        launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
 }

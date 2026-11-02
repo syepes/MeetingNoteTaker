@@ -26,7 +26,7 @@ flowchart TD
 
 The `MeetingNoteTaker` target owns presentation and user actions. `AppModel` coordinates those actions on the main actor. `MeetingCore` owns session models, capture, inference, persistence and document rendering support; it also contains AppKit-based viewer infrastructure, so it is not a platform-independent library. `AudioDSP` supplies C++ audio-buffer operations. The separately built Whisper worker and native inference executables are bundled helpers rather than Swift package targets.
 
-`MeetingPipeline` and `SessionStore` use actors to coordinate processing and persisted state. `ProcessingCoordinator` tracks job ownership so cancelled work cannot update a newer recording. Capture callbacks hand off buffered audio rather than performing inference or document work in the audio path.
+`MeetingPipeline` and `SessionStore` use actors to coordinate processing and persisted state. `ProcessingCoordinator` tracks job ownership so cancelled work cannot update a newer recording. Capture callbacks hand off buffered audio rather than performing inference or document work in the audio path. The writer batches packet output with bounded buffers while retaining durable five-second checkpoints. Meter work is gated by native menu visibility and capped at ten updates per second. Hardware discovery uses change notifications plus a five-second cache refresh; health checks remain once per second. See [Recording performance](RecordingPerformance.md) for measurements and validation limits.
 
 ## Main processing flows
 

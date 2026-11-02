@@ -4,22 +4,25 @@ import SwiftUI
 /// MenuBarExtra can retain its largest window size even when its SwiftUI content
 /// shrinks. Measure the content independently and resize the actual panel too.
 struct MenuPopoverSizing: ViewModifier {
+    var onVisibilityChange: (Bool) -> Void = { _ in }
     @State private var contentSize: CGSize = .zero
 
     func body(content: Content) -> some View {
         content
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: CGSize.self) { $0.size } action: { contentSize = $0 }
-            .background(MenuPopoverWindowSize(size: contentSize))
+            .background(MenuPopoverWindowSize(size: contentSize, onVisibilityChange: onVisibilityChange))
     }
 }
 
 private struct MenuPopoverWindowSize: NSViewRepresentable {
     let size: CGSize
+    let onVisibilityChange: (Bool) -> Void
 
     func makeNSView(context: Context) -> SizingView { SizingView() }
 
     func updateNSView(_ view: SizingView, context: Context) {
+        view.onVisibilityChange = onVisibilityChange
         view.contentSize = size
         view.scheduleResize()
     }
@@ -27,11 +30,21 @@ private struct MenuPopoverWindowSize: NSViewRepresentable {
     final class SizingView: NSView {
         var contentSize: CGSize = .zero
         private var resizeScheduled = false
+        var onVisibilityChange: (Bool) -> Void = { _ in }
+        private var visibilityObservation: NSKeyValueObservation?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             NotificationCenter.default.removeObserver(self)
+            visibilityObservation = nil
+            if window == nil { onVisibilityChange(false) }
             if let window {
+                visibilityObservation = window.observe(\.isVisible, options: [.initial, .new]) { [weak self] _, _ in
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.onVisibilityChange(self.window?.isVisible == true)
+                    }
+                }
                 // Also correct a later resize by SwiftUI or a cached size on reopen.
                 for name in [NSWindow.didResizeNotification, NSWindow.didBecomeKeyNotification] {
                     NotificationCenter.default.addObserver(self, selector: #selector(windowChanged), name: name, object: window)

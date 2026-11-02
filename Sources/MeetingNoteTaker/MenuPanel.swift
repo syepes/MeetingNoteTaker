@@ -94,7 +94,8 @@ struct MenuPanel: View {
         }
         .font(.system(size: 13))
         .frame(width: 300)
-        .modifier(MenuPopoverSizing())
+        .modifier(MenuPopoverSizing(onVisibilityChange: { model.recordingMetersVisible = $0 }))
+        .onDisappear { model.recordingMetersVisible = false }
     }
 
     private var recordingStatus: some View {
