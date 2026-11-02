@@ -76,7 +76,7 @@ struct MenuPanel: View {
                 } label: {
                     menuLabel("Keyboard Shortcuts", symbol: "keyboard")
                 }
-                OpenSettingsButton { menuLabel("Settings…", symbol: "gearshape", shortcut: "⌘,") }
+                OpenSettingsButton(closesContainingWindow: true) { menuLabel("Settings…", symbol: "gearshape", shortcut: "⌘,") }
                     .keyboardShortcut(",", modifiers: .command)
                 Button {
                     if model.recording == nil {

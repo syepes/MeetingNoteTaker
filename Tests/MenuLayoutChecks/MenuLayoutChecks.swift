@@ -127,11 +127,17 @@ struct MenuLayoutChecks {
                                    styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         preferences.isReleasedWhenClosed = false
         var requests = 0
-        presentation.open { requests += 1 }
+        panel.orderFront(nil)
+        presentation.open(dismissing: panel) {
+            precondition(!panel.isVisible, "Settings must dismiss the menu before opening its scene")
+            requests += 1
+        }
         presentation.attach(preferences)
         precondition(preferences.isVisible, "First Settings request must show a later-created window")
         preferences.close()
-        presentation.open { requests += 1 }
+        panel.orderFront(nil)
+        presentation.open(dismissing: panel) { requests += 1 }
+        precondition(!panel.isVisible, "Reopening Settings must also dismiss the menu")
         precondition(preferences.isVisible, "Settings must reopen after closing")
         preferences.orderOut(nil)
         presentation.open { requests += 1 }
