@@ -5,7 +5,10 @@ import FluidAudio
 final class ParakeetSampleIntegrationTests: XCTestCase {
     func testASROnlyConfiguration() {
         XCTAssertFalse(TextNormalizer().isNativeAvailable, "NeMo must not be linked in the ASR-only build")
-        XCTAssertTrue(ASRConfig.default.seamTimingRealignment)
+        let config = ParakeetProvider.inferenceConfig
+        XCTAssertTrue(config.seamGapRepair)
+        XCTAssertEqual(config.seamGapRepairMinGapSeconds, 0.5)
+        XCTAssertTrue(config.seamTimingRealignment)
     }
 
     func testV2FileAndSamples() async throws { try await compare(version: "v2", modelVariable: "MNT_PARAKEET_V2_MODEL") }

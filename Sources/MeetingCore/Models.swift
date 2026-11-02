@@ -11,6 +11,16 @@ public actor ModelManager {
         guard FileManager.default.fileExists(atPath: url.path) else { throw MeetingError.message("Choose an installed model file first.") }
         if kind == .parakeet {
             _ = try parakeetVersion(at: url)
+            // A cancelled fetch may leave all bundle directories but only partial weights.
+            let components = try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "mlmodelc" }
+            for component in components {
+                guard FileManager.default.fileExists(atPath: component.appendingPathComponent("coremldata.bin").path),
+                      let files = FileManager.default.enumerator(at: component, includingPropertiesForKeys: nil),
+                      !files.contains(where: { ($0 as? URL)?.pathExtension == "partial" }) else {
+                    throw MeetingError.message("Parakeet download is incomplete. Retry Download to resume it.")
+                }
+            }
         } else {
             let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
             let magic = try file.read(upToCount: 4) ?? Data()

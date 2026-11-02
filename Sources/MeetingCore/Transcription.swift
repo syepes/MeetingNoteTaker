@@ -62,6 +62,10 @@ final class WhisperProvider: TranscriptionProvider {
     func shutdown() async { await worker?.shutdown(); worker = nil }
 }
 final class ParakeetProvider: InMemoryTranscriptionProvider {
+    // Recovery applies within FluidAudio's recognition windows, not between our 25-second jobs.
+    static var inferenceConfig: ASRConfig {
+        ASRConfig(seamGapRepair: true, seamGapRepairMinGapSeconds: 0.5, seamTimingRealignment: true)
+    }
     let settings: SpeechSettings; var manager: AsrManager?
     init(_ settings: SpeechSettings) { self.settings = settings }
     func prepare() async throws {
@@ -71,7 +75,7 @@ final class ParakeetProvider: InMemoryTranscriptionProvider {
         let version = try ModelManager.parakeetRuntimeVersion(actualVersion)
         // loadLocal deliberately never repairs by downloading: local mode stays offline.
         let models = try AsrModels.loadLocal(from: URL(fileURLWithPath: settings.modelPath), version: version)
-        let manager = AsrManager(config: .default); try await manager.loadModels(models); self.manager = manager
+        let manager = AsrManager(config: Self.inferenceConfig); try await manager.loadModels(models); self.manager = manager
     }
     func transcribe(_ url: URL, source: AudioSource, offset: Double, duration: Double) async throws -> [TranscriptSegment] {
         try Task.checkCancellation()

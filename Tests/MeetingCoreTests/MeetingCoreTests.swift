@@ -230,6 +230,7 @@ final class MeetingCoreTests: XCTestCase {
             try FileManager.default.createDirectory(at:url,withIntermediateDirectories:true)
             for name in ["Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc", joint] {
                 try FileManager.default.createDirectory(at:url.appendingPathComponent(name),withIntermediateDirectories:true)
+                try Data([1]).write(to:url.appendingPathComponent(name).appendingPathComponent("coremldata.bin"))
             }
             try Data("{}".utf8).write(to:url.appendingPathComponent("parakeet_vocab.json"))
             XCTAssertEqual(try ModelManager.parakeetVersion(at:url), expected)
@@ -279,6 +280,7 @@ final class MeetingCoreTests: XCTestCase {
         try FileManager.default.createDirectory(at:source,withIntermediateDirectories:true)
         for name in ["Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc", "JointDecisionv3.mlmodelc"] {
             try FileManager.default.createDirectory(at:source.appendingPathComponent(name),withIntermediateDirectories:true)
+            try Data([1]).write(to:source.appendingPathComponent(name).appendingPathComponent("coremldata.bin"))
         }
         try Data("{}".utf8).write(to:source.appendingPathComponent("parakeet_vocab.json"))
         try Data(#"{"base_model":"moondream/parakeet-ultra","contract":"parakeet-tdt-0.6b-v3-coreml"}"#.utf8).write(to:source.appendingPathComponent("config.json"))
