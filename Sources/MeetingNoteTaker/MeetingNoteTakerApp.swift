@@ -33,6 +33,7 @@ struct MeetingNoteTakerApp: App {
 struct MeetingList: View {
     @EnvironmentObject var model: AppModel
     @State private var selected: UUID?
+    @State private var playbackWindowOpen = true
     @State private var deletionCandidate: MeetingSession?
     @State private var searchText = ""
     @State private var searchMatches: Set<UUID> = []
@@ -46,6 +47,12 @@ struct MeetingList: View {
     @State private var analysisProfileChoice = ""
     @State private var viewerMode: MeetingViewerMode = .preview
     var current: MeetingSession? { model.sessions.first { $0.id == selected } }
+    private var playbackSelection: PlaybackSelection? {
+        guard let session = current, !session.audioDeleted, session.deletionRequestedAt == nil,
+              !model.deletingMeeting, model.processingMeetingID != session.id, model.playbackRemovalID != session.id,
+              let fingerprint = session.audioFingerprint else { return nil }
+        return .init(id: session.id, url: session.audioURL, version: fingerprint)
+    }
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
@@ -66,7 +73,19 @@ struct MeetingList: View {
                     if searchingQuery && !searching && visibleSessions.isEmpty { Text("No matching meetings").foregroundStyle(.secondary) }
                 }
             }.navigationTitle("Meetings")
-            .toolbar { Button { model.toggleRecording() } label: { Label(model.recording == nil ? "Record" : "Stop", systemImage: model.recording == nil ? "record.circle" : "stop.circle") }.disabled(model.deletingMeeting) }
+            .toolbar {
+                Button { model.toggleRecording() } label: {
+                    Label {
+                        Text(model.recording == nil ? "Record" : "Stop")
+                    } icon: {
+                        Image(systemName: model.recording == nil ? "record.circle" : "record.circle.fill")
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(model.recording == nil ? Color.secondary : Color.red)
+                    }
+                }
+                .help(model.recording == nil ? "Start recording" : "Stop recording")
+                .disabled(model.deletingMeeting)
+            }
         } detail: {
             if let session = current {
                 VStack(alignment: .leading, spacing: 12) {
@@ -86,7 +105,7 @@ struct MeetingList: View {
                     }
                     HStack {
                         if !session.audioDeleted && session.audioFingerprint != nil {
-                            Button("Play") { model.play(session) }; Button("Stop playback", action: model.stopPlayback)
+                            MeetingPlaybackButtons(playback: model.playback)
                             Button(session.status == .complete ? "Retranscribe with current model" : "Retry with current model") { model.process(session, useCurrentSettings: true) }.disabled(model.working || model.recording != nil)
                             if session.status != .complete && !session.completedChunks.isEmpty {
                                 Button("Resume saved job") { model.process(session, resume: true) }.disabled(model.working || model.recording != nil)
@@ -100,6 +119,10 @@ struct MeetingList: View {
                         if model.working { Button("Cancel", action: model.cancelWork) }
                     }
                     .disabled(model.deletingMeeting || session.deletionRequestedAt != nil)
+                    if !session.audioDeleted && session.audioFingerprint != nil {
+                        MeetingPlaybackProgress(playback: model.playback)
+                            .disabled(model.deletingMeeting || session.deletionRequestedAt != nil)
+                    }
                     Picker("Analysis profile", selection: $analysisProfileChoice) {
                         Text(session.profileSnapshot.map { saved in
                             model.profileCatalog?.profiles.first(where: { $0.id == saved.id }).map { "Assigned: \($0.name) · latest version" } ?? "Deleted profile: \(saved.name) — choose a replacement"
@@ -134,10 +157,6 @@ struct MeetingList: View {
                 searchMatches = result.ids; unreadableSearchFiles = result.unreadableFiles; searching = false
             } catch { if !Task.isCancelled { searching = false } }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
-            guard let window = notification.object as? NSWindow, window.identifier?.rawValue == "meetings" else { return }
-            Task { await model.reload() }
-        }
         .alert("Move meeting to Trash?", isPresented: Binding(get: { deletionCandidate != nil }, set: { if !$0 { deletionCandidate = nil } }), presenting: deletionCandidate) { candidate in
             Button("Cancel", role: .cancel) { deletionCandidate = nil }.keyboardShortcut(.defaultAction)
             Button("Move to Trash", role: .destructive) {
@@ -151,6 +170,19 @@ struct MeetingList: View {
         } message: { candidate in
             Text("“\(candidate.stem)” and its transcript, personal notes, analyses, audio, recovery files and meeting history will move to macOS Trash.")
         }
-        .onAppear { UserDefaults.standard.set(true, forKey: "hasOpenedNotebook"); Task { await model.reload() } }
+        .onChange(of: playbackSelection, initial: true) { _, selection in if playbackWindowOpen { model.playback.select(selection) } }
+        .onChange(of: model.documentUpdateID) { _, _ in if playbackWindowOpen { model.playback.select(playbackSelection) } }
+        .onDisappear { playbackWindowOpen = false; model.playback.release() }
+        .background(MeetingPlaybackWindowLifecycle(opened: {
+            playbackWindowOpen = true; model.playback.select(playbackSelection)
+            Task { await model.reload() }
+        }, closed: {
+            playbackWindowOpen = false; model.playback.release()
+        }))
+        .onAppear {
+            playbackWindowOpen = true
+            model.playback.select(playbackSelection)
+            UserDefaults.standard.set(true, forKey: "hasOpenedNotebook"); Task { await model.reload() }
+        }
     }
 }

@@ -42,3 +42,6 @@ FluidAudio is pinned to **0.18.2** (`e396cf780c4abf8e395087467c0585d3b0d17f68`) 
 Use [Architecture](Architecture.md) for the end-to-end flows and [Development](Development.md) for commands. Existing tests are behavior checks, not a substitute for live hardware and permission testing.
 
 Meeting management additionally uses `SessionStore.trashMeeting` for resumable Trash operations and [MeetingSearch.swift](../Sources/MeetingCore/MeetingSearch.swift) for background content filtering. `MeetingSession.deletionRequestedAt` is optional for compatibility with existing history. The document reader can clear its snapshot and invalidate pending reads after a selected meeting is deleted.
+
+
+Meeting playback uses [MeetingPlaybackController.swift](../Sources/MeetingCore/MeetingPlaybackController.swift) for isolated state and serialized player operations, and [MeetingPlaybackView.swift](../Sources/MeetingCore/MeetingPlaybackView.swift) for the native buttons and seek slider. The Meetings view supplies selection/file identity and window lifecycle events; AppModel coordinates release before file removal or replacement.

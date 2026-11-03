@@ -78,3 +78,8 @@ An optimized temporary native menu harness supplied 100 meter pairs at 10 Hz ove
 `CaptureControlTests` verifies that a simulated blocking audio-service call leaves the main actor usable, that pause/resume/stop cannot overtake a suspended start, and that failed commands do not prevent stop. Health checks preserve warnings, recovery, paused state and dropped-buffer reports while ignoring raw timestamps and free-byte counters. Native menu checks confirm 100 meter updates produce no shared-model invalidations and retain existing layouts, Settings reopening and shortcut behavior.
 
 Validation: 194 core tests, 13 optional model/fixture/benchmark skips, no failures; 17 release checks and the consolidated menu/Settings/shortcut checks passed. Live microphone/computer capture, permission prompts, Bluetooth/hotplug and menu interaction latency during an actual meeting remain manual smoke-test requirements. No user audio was recorded or model weights downloaded for this change.
+
+
+### Seekable playback validation
+
+`MeetingPlaybackTests` covers seek clamping, stopped and playing scrubs, Stop/reset, completion/replay, rapid selection and stale loads, release, time labels, corrupt files and loading/seeking a generated silent audio file without autoplay. Transport state tests use an injected player, so they do not depend on an audio output device. Native light/dark control snapshots are written to `.build/playback-light.png` and `.build/playback-dark.png`. Real-device audible playback and manual VoiceOver/keyboard interactions remain smoke tests; automated checks do not claim these passed.

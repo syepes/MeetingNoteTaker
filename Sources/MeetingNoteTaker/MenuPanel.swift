@@ -58,7 +58,7 @@ struct MenuPanel: View {
                     openWindow(id: "meetings")
                     NSApp.activate(ignoringOtherApps: true)
                 } label: {
-                    menuLabel("Meetings & transcripts…", symbol: "text.book.closed", shortcut: "⇧⌘M")
+                    menuLabel("Meetings", symbol: "text.book.closed", shortcut: "⇧⌘M")
                 }
                 .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button {

@@ -30,7 +30,7 @@ struct ShortcutReferenceEntry: Identifiable, Equatable {
                 .init(title: "Cancel processing", keys: ["⌘", "."])
             ]),
             ("Navigation & Application", "macwindow", [
-                .init(title: "Meetings & transcripts", keys: ["⇧", "⌘", "M"]),
+                .init(title: "Meetings", keys: ["⇧", "⌘", "M"]),
                 .init(title: "Open output folder", keys: ["⇧", "⌘", "O"]),
                 .init(title: "Settings", keys: ["⌘", ","]),
                 .init(title: "Quit", keys: ["⌘", "Q"])

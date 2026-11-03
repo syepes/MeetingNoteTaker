@@ -60,8 +60,10 @@ final class AppModel: ObservableObject {
     private var memoryRecovery: Task<Void, Never>?
     private var modelJob: Task<Void,Never>?
     private var busyID: UUID?
+    var processingMeetingID: UUID? { working ? busyID : nil }
     @Published private(set) var preparingRecording = false
-    private var player: AVAudioPlayer?
+    let playback = MeetingPlaybackController()
+    @Published private(set) var playbackRemovalID: UUID?
     private var retentionTimer: Timer?
     private var observers: [NSObjectProtocol] = []
     var hotkey: GlobalHotkey?
@@ -322,9 +324,11 @@ final class AppModel: ObservableObject {
     }
     func recoverSession(_ session: MeetingSession) {
         guard session.deletionRequestedAt == nil else { return }
-        guard !deletingMeeting, !working, recording == nil, !preparingRecording, !audioCheckRunning, !memorySuspended else { return }; working = true; progress = "Recovering audio…"
+        guard !deletingMeeting, !working, recording == nil, !preparingRecording, !audioCheckRunning, !memorySuspended else { return }; working = true; busyID = session.id; progress = "Recovering audio…"
         let token = coordinator.begin()
         job = Task {
+            if playback.selection?.id == session.id { await playback.releaseAndWait() }
+            else { await playback.waitForPendingOperations() }
             do { let result = try await pipeline.finalize(session, store: store); await reload(); guard coordinator.owns(token) else { return }; working = false; process(result, resume: true) }
             catch { if coordinator.owns(token) { self.error = error.localizedDescription; working = false } }
         }
@@ -373,6 +377,8 @@ final class AppModel: ObservableObject {
         }
         session.queuedForProcessing = true
         job = Task {
+            if playback.selection?.id == session.id { await playback.releaseAndWait() }
+            else { await playback.waitForPendingOperations() }
             do {
                 try await store.save(session)
                 var result = session
@@ -459,6 +465,8 @@ final class AppModel: ObservableObject {
         await reload()
     }
     private func applyRetention(_ session: MeetingSession) async throws -> MeetingSession {
+        if playback.selection?.id == session.id { await playback.releaseAndWait() }
+        else { await playback.waitForPendingOperations() }
         let policy = settings.retention
         let task = Task.detached { try RetentionService.apply(session, policy: policy) }
         let updated = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
@@ -466,14 +474,19 @@ final class AppModel: ObservableObject {
     }
     func cleanup() async {
         guard !deletingMeeting, recording == nil, !working, !preparingRecording else { return }
+        defer { playbackRemovalID = nil }
         do {
+            if let id = playback.selection?.id, let session = sessions.first(where: { $0.id == id }),
+               session.status == .complete, let exported = session.firstSuccessfulExport,
+               settings.retention.isDue(exported: exported, now: Date()) {
+                playbackRemovalID = id
+                await playback.releaseAndWait()
+            }
             let failures = try await store.cleanup(policy: settings.retention)
             if let first = failures.first { progress = "Cleanup deferred: \(first)" }
         } catch { progress = "Cleanup deferred: \(error.localizedDescription)" }
         await reload()
     }
-    func play(_ session: MeetingSession) { guard !deletingMeeting, session.deletionRequestedAt == nil else { return }; do { player?.stop(); player = try AVAudioPlayer(contentsOf: session.audioURL); player?.play() } catch { self.error = error.localizedDescription } }
-    func stopPlayback() { player?.stop() }
     var canDeleteMeeting: Bool {
         !deletingMeeting && !working && recording == nil && !preparingRecording && !audioCheckRunning
     }
@@ -481,7 +494,7 @@ final class AppModel: ObservableObject {
         guard canDeleteMeeting, sessions.contains(where: { $0.id == id }) else { return false }
         deletingMeeting = true
         defer { deletingMeeting = false; resumeQueuedWork() }
-        stopPlayback(); player = nil; error = nil; progress = "Moving meeting to Trash…"
+        await playback.releaseAndWait(); error = nil; progress = "Moving meeting to Trash…"
         do {
             try await store.trashMeeting(id)
             await reload(); preview = ""; progress = "Meeting moved to Trash"
