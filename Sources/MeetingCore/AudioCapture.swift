@@ -4,8 +4,11 @@ import CoreAudio
 import AudioDSP
 import Accelerate
 
-public struct MicrophoneDevice: Identifiable { public var id: String; public var name: String; public var objectID: AudioDeviceID }
+public struct MicrophoneDevice: Identifiable, Sendable { public var id: String; public var name: String; public var objectID: AudioDeviceID }
 public enum AudioDevices {
+    public static func discoverMicrophones() async -> [MicrophoneDevice] {
+        await Task { @CaptureControl in microphones() }.value
+    }
     public static func microphones() -> [MicrophoneDevice] {
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
@@ -166,9 +169,9 @@ final class CaptureWriter: @unchecked Sendable {
     }
 }
 
-/// All source lifecycle operations run on the main actor. The realtime callbacks
+/// All source lifecycle operations run on the capture-control executor. The realtime callbacks
 /// capture only rings and a fixed monotonic origin, never mutable capture state.
-@MainActor public final class CoreAudioCapture: AudioCaptureBackend {
+@CaptureControl final class CaptureWorker {
     private let rings = CaptureRings()
     private var writer: CaptureWriter?
     public var metersEnabled = false {
@@ -203,6 +206,13 @@ final class CaptureWriter: @unchecked Sendable {
     public var onFailure: ((String) -> Void)?
     public var onFatal: ((String) -> Void)?
     public var onHealth: ((CaptureHealthSnapshot) -> Void)?
+    private var publishedHealth: CaptureHealthSnapshot?
+    private func publishHealth() {
+        let presentation = health.presentation
+        guard presentation != publishedHealth else { return }
+        publishedHealth = presentation
+        onHealth?(health)
+    }
     public var microphoneEnabled: Bool {
         get { !mnt_ring_is_muted(rings.mic) }
         set {
@@ -214,7 +224,10 @@ final class CaptureWriter: @unchecked Sendable {
             }
         }
     }
-    public init() {}
+    nonisolated init() {}
+    var state: (health: CaptureHealthSnapshot, wallStart: Date, fatalError: String?, stoppedElapsed: Double, startHost: Double, running: Bool) {
+        (health, wallStart, fatalError, stoppedElapsed, startHost, running)
+    }
     private func check(_ code: OSStatus, _ operation: String) throws {
         guard code == noErr else { throw MeetingError.message("\(operation) failed (Core Audio \(code)). Check audio permissions and the selected device.") }
     }
@@ -229,14 +242,16 @@ final class CaptureWriter: @unchecked Sendable {
         guard !running else { throw MeetingError.message("Audio capture is already running.") }
         if microphoneEnabled { _ = await AVCaptureDevice.requestAccess(for: .audio) }
         mnt_ring_reset(rings.mic); mnt_ring_reset(rings.computer)
-        health = .init(); retryAt = [:]; gapStart = [:]; restartedAt = [:]; processIDs = []
+        health = .init(); publishedHealth = nil; retryAt = [:]; gapStart = [:]; restartedAt = [:]; processIDs = []
         self.target = target; micID = microphoneID
+        // Always discover again after permission prompts, before opening either source.
+        refreshDiscovery(at: 0)
         // Resolve the system default once. Reconnection must not substitute another microphone.
         if micID.isEmpty {
             let id = AudioApplications.property(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultInputDevice, initial: AudioDeviceID(0))
-            resolvedMicID = AudioDevices.microphones().first(where: { $0.objectID == id })?.id ?? ""
+            resolvedMicID = cachedMicrophones.first(where: { $0.objectID == id })?.id ?? ""
         } else { resolvedMicID = micID }
-        microphoneWasAvailable = AudioDevices.microphones().contains { $0.id == resolvedMicID }
+        microphoneWasAvailable = cachedMicrophones.contains { $0.id == resolvedMicID }
         startHost = AVAudioTime.seconds(forHostTime: mach_absolute_time()); wallStart = Date()
         stoppedElapsed = 0; paused = false; fatalReported = false; fatalError = nil; health.phase = .recording
         let free = (try FileManager.default.attributesOfFileSystem(forPath: folder.path)[.systemFreeSize] as? NSNumber)?.int64Value
@@ -250,7 +265,7 @@ final class CaptureWriter: @unchecked Sendable {
         discoveryDirty = true; lastDiscovery = -.infinity
         installDiscoveryListeners()
         writer.onUpdate = { [weak self] mic, computer, free, error in
-            Task { @MainActor in
+            Task { @CaptureControl in
                 guard let self, self.running else { return }
                 if self.metersEnabled { self.onLevels?(mic, computer) }
                 if let free { self.health.availableBytes = free; self.health.storageWarning = CaptureRecoveryPolicy.storageState(bytes: free) }
@@ -260,8 +275,8 @@ final class CaptureWriter: @unchecked Sendable {
         running = true; writer.start(); record(.started, "Capture started.")
         retry(.computer)
         if microphoneEnabled { retry(.microphone) } else { health.microphone.availability = .disabled }
-        observers.append(NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main) { [weak self] note in
-            Task { @MainActor in
+        observers.append(NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: nil) { [weak self] note in
+            Task { @CaptureControl in
                 guard let self, self.running, let engine = self.engine, note.object as? AVAudioEngine === engine else { return }
                 self.degrade(.microphone, "Microphone configuration changed."); self.retryAt[.microphone] = self.elapsed
             }
@@ -273,7 +288,7 @@ final class CaptureWriter: @unchecked Sendable {
                 self.inspect()
             }
         }
-        onHealth?(health)
+        publishHealth()
     }
     private func record(_ kind: CaptureEventKind, source: AudioSource? = nil, _ text: String) {
         let time = elapsed
@@ -282,12 +297,12 @@ final class CaptureWriter: @unchecked Sendable {
     public func pause() {
         guard running, !paused else { return }; paused = true
         let time = elapsed; mnt_ring_pause(rings.mic, time); mnt_ring_pause(rings.computer, time)
-        health.phase = .paused; record(.paused, "Recording paused; silence preserves elapsed time."); onHealth?(health)
+        health.phase = .paused; record(.paused, "Recording paused; silence preserves elapsed time."); publishHealth()
     }
     public func resume() {
         guard running, paused else { return }; paused = false
         let time = elapsed; mnt_ring_resume(rings.mic, time); mnt_ring_resume(rings.computer, time)
-        health.phase = .recording; record(.resumed, "Recording resumed."); onHealth?(health)
+        health.phase = .recording; record(.resumed, "Recording resumed."); publishHealth()
     }
     private func degrade(_ source: AudioSource, _ message: String) {
         if gapStart[source] == nil { gapStart[source] = elapsed; record(.gapBegan, source: source, message + " Missing audio remains silence.") }
@@ -316,17 +331,20 @@ final class CaptureWriter: @unchecked Sendable {
         for selector in [kAudioHardwarePropertyDevices, kAudioHardwarePropertyProcessObjectList, kAudioHardwarePropertyDefaultOutputDevice] {
             var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
             let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-                Task { @MainActor in self?.discoveryDirty = true }
+                Task { @CaptureControl in self?.discoveryDirty = true }
             }
             if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, block) == noErr { discoveryListeners.append((address, block)) }
         }
     }
+    private func refreshDiscovery(at time: Double) {
+        cachedMicrophones = AudioDevices.microphones()
+        cachedProcesses = AudioApplications.resolve(target).ids
+        discoveryDirty = false; lastDiscovery = time
+    }
     private func inspect() {
         let now = elapsed
         if discoveryDirty || now-lastDiscovery >= 5 {
-            cachedMicrophones = AudioDevices.microphones()
-            cachedProcesses = AudioApplications.resolve(target).ids
-            discoveryDirty = false; lastDiscovery = now
+            refreshDiscovery(at: now)
         }
         let microphones = cachedMicrophones
         let resolved = (ids: cachedProcesses, active: cachedProcesses.contains { AudioApplications.property($0, kAudioProcessPropertyIsRunningOutput, initial: UInt32(0)) != 0 })
@@ -360,7 +378,7 @@ final class CaptureWriter: @unchecked Sendable {
                 if now >= next || returned { retry(source) }
             }
         }
-        onHealth?(health)
+        publishHealth()
     }
     private func stopMicrophone() { engine?.stop(); engine?.inputNode.removeTap(onBus: 0); engine = nil }
     private func startMicrophone() throws {

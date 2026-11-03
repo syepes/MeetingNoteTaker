@@ -132,8 +132,7 @@ struct MenuPanel: View {
             .font(.callout)
 
             if model.recording != nil {
-                LevelRow(title: "Microphone", value: model.microphoneLevel, enabled: model.settings.microphoneEnabled)
-                LevelRow(title: "Computer", value: model.computerLevel)
+                LiveAudioLevels(state: model.audioLevels, microphoneEnabled: model.settings.microphoneEnabled)
                 Text(model.captureHealthText)
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

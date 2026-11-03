@@ -23,8 +23,10 @@ private struct MenuPopoverWindowSize: NSViewRepresentable {
 
     func updateNSView(_ view: SizingView, context: Context) {
         view.onVisibilityChange = onVisibilityChange
-        view.contentSize = size
-        view.scheduleResize()
+        if view.contentSize != size {
+            view.contentSize = size
+            view.scheduleResize()
+        }
     }
 
     final class SizingView: NSView {

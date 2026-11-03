@@ -142,8 +142,8 @@ private struct ShortcutKeycaps: View {
         HStack(spacing: 4) {
             if keys.isEmpty { Text("Unavailable").font(.caption).foregroundStyle(.secondary) }
             ForEach(Array(keys.enumerated()), id: \.offset) { _, key in
-                Text(key).font(.system(size: 13, weight: .medium, design: .monospaced))
-                    .frame(minWidth: 19, minHeight: 23).padding(.horizontal, 3)
+                Text(key).font(.system(size: 17, weight: .medium, design: .monospaced))
+                    .frame(minWidth: 19, minHeight: 32).padding(.horizontal, 3)
                     .background(Color(nsColor: .windowBackgroundColor), in: .rect(cornerRadius: 5))
                     .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.primary.opacity(0.12)))
             }

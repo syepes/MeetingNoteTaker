@@ -8,6 +8,7 @@ source scripts/build-env.sh
 mkdir -p .build/menu-layout-checks
 /usr/bin/xcrun swiftc -target arm64-apple-macosx26.0 -parse-as-library -swift-version 5 \
   Sources/MeetingNoteTaker/MenuPanel.swift \
+  Sources/MeetingNoteTaker/AudioLevelState.swift \
   Sources/MeetingNoteTaker/ShortcutReferenceView.swift \
   Sources/MeetingNoteTaker/OpenSettingsButton.swift \
   Sources/MeetingNoteTaker/MenuPopoverSizing.swift \

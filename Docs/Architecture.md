@@ -11,7 +11,7 @@ The application owns capture, processing jobs, model management and export. User
 ```mermaid
 flowchart TD
     UI[Menu, Settings and Meetings] --> App[AppModel]
-    App --> Capture[CoreAudioCapture]
+    App --> Capture[CoreAudioCapture interface / CaptureWorker executor]
     Capture --> DSP[AudioDSP buffers and staging files]
     App --> Pipeline[MeetingPipeline]
     DSP --> Pipeline
@@ -26,7 +26,11 @@ flowchart TD
 
 The `MeetingNoteTaker` target owns presentation and user actions. `AppModel` coordinates those actions on the main actor. `MeetingCore` owns session models, capture, inference, persistence and document rendering support; it also contains AppKit-based viewer infrastructure, so it is not a platform-independent library. `AudioDSP` supplies C++ audio-buffer operations. The separately built Whisper worker and native inference executables are bundled helpers rather than Swift package targets.
 
-`MeetingPipeline` and `SessionStore` use actors to coordinate processing and persisted state. `ProcessingCoordinator` tracks job ownership so cancelled work cannot update a newer recording. Capture callbacks hand off buffered audio rather than performing inference or document work in the audio path. The writer batches packet output with bounded buffers while retaining durable five-second checkpoints. Meter work is gated by native menu visibility and capped at ten updates per second. Hardware discovery uses change notifications plus a five-second cache refresh; health checks remain once per second. See [Recording performance](RecordingPerformance.md) for measurements and validation limits.
+`MeetingPipeline` and `SessionStore` use actors to coordinate processing and persisted state. `ProcessingCoordinator` tracks job ownership so cancelled work cannot update a newer recording.
+
+The main-actor `CoreAudioCapture` interface forwards ordered commands to `CaptureWorker` on a dedicated serial executor (`CaptureControl`). Discovery, health queries, device start/stop and recovery therefore cannot block the UI executor while waiting for an audio service. Commands remain ordered across asynchronous permission requests; stop waits for prior commands and the writer flush. Only callbacks and presentation snapshots return to the main actor. Capture callbacks hand off buffered audio rather than performing inference or document work in the audio path.
+
+The writer batches packet output with bounded buffers while retaining durable five-second checkpoints. Meter work is gated by native menu visibility and capped at ten updates per second. `AudioLevelState` is observed only by the meter views, not the shared app model. Health presentation updates exclude changing timestamps and raw free-byte counts; warnings and status changes still publish. Menu size checks are scheduled only for changed dimensions or native window lifecycle events. Every capture start refreshes microphone and audio-process discovery after permission prompts, independent of the cache; the UI lists also refresh before recording. Hardware discovery during capture uses change notifications plus a five-second cache refresh; health checks remain once per second. See [Development](Development.md#recording-menu-responsiveness) for measurements and validation limits.
 
 ## Main processing flows
 

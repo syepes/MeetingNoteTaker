@@ -30,8 +30,7 @@ final class AppModel: ObservableObject {
     @Published var progress = "Ready"
     @Published var error: String?
     var recordingMetersVisible = false { didSet { capture?.metersEnabled = recordingMetersVisible } }
-    @Published var microphoneLevel: Float = 0
-    @Published var computerLevel: Float = 0
+    let audioLevels = AudioLevelState()
     @Published var startedAt: Date?
     @Published var models: [InstalledModel] = []
     @Published var modelStatus = ""
@@ -113,7 +112,9 @@ final class AppModel: ObservableObject {
         do { try profileHotkey?.register(keyCode: settings.shortcutKeyCode, modifiers: settings.shortcutModifiers | UInt32(shiftKey)) }
         catch { self.error = error.localizedDescription }
     }
-    func refreshMicrophones() { microphones = AudioDevices.microphones() }
+    func refreshMicrophones() {
+        Task { microphones = await AudioDevices.discoverMicrophones() }
+    }
     func refreshCaptureApplications() { captureApplications = AudioApplications.available() }
     private func watchMemory() {
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .main)
@@ -149,7 +150,7 @@ final class AppModel: ObservableObject {
         audioCheckRunning = true; audioCheckStatus = "Checking permissions and audio…"
         Task {
             let check = CoreAudioCapture(); check.microphoneEnabled = settings.microphoneEnabled
-            check.onLevels = { [weak self] mic, computer in self?.microphoneLevel = mic; self?.computerLevel = computer }
+            check.onLevels = { [weak self] mic, computer in self?.audioLevels.update(microphone: mic, computer: computer) }
             check.onHealth = { [weak self] health in
                 self?.audioCheckStatus = "Microphone: \(health.microphone.message). Computer: \(health.computer.message)." + (health.storageWarning.map { " " + $0 } ?? "")
             }
@@ -160,7 +161,7 @@ final class AppModel: ObservableObject {
                 _ = try await check.stop()
                 audioCheckStatus += " Check complete; no audio saved."
             } catch { _ = try? await check.stop(); audioCheckStatus = error.localizedDescription }
-            audioCheckRunning = false; microphoneLevel = 0; computerLevel = 0
+            audioCheckRunning = false; audioLevels.update(microphone: 0, computer: 0)
         }
     }
     func saveSettings() {
@@ -271,15 +272,18 @@ final class AppModel: ObservableObject {
                 let capture = CoreAudioCapture(); self.capture = capture
                 capture.microphoneEnabled = settings.microphoneEnabled
                 capture.metersEnabled = recordingMetersVisible
-                capture.onLevels = { [weak self] mic, computer in self?.microphoneLevel = mic; self?.computerLevel = computer }
+                capture.onLevels = { [weak self] mic, computer in self?.audioLevels.update(microphone: mic, computer: computer) }
                 capture.onHealth = { [weak self] health in
                     guard let self, self.coordinator.owns(token) else { return }
-                    self.captureHealth = health; self.progress = health.summary
+                    self.captureHealth = health
+                    if self.progress != health.summary { self.progress = health.summary }
                 }
                 capture.onFatal = { [weak self] text in
                     guard let self, self.coordinator.owns(token) else { return }
                     self.error = text; self.stopRecording(interrupted: true)
                 }
+                refreshMicrophones()
+                refreshCaptureApplications()
                 working = true; progress = "Requesting audio access…"
                 do { try await capture.start(session: session, microphoneID: settings.microphoneID) }
                 catch { var failed = session; failed.status = .interrupted; failed.error = error.localizedDescription; try await store.save(failed); throw error }
@@ -297,7 +301,7 @@ final class AppModel: ObservableObject {
         job = Task {
             do {
                 session.events += try await capture.stop(); session.duration = capture.stoppedElapsed
-                self.capture = nil; microphoneLevel = 0; computerLevel = 0
+                self.capture = nil; audioLevels.update(microphone: 0, computer: 0)
                 if interrupted { session.events.append(.init(time: Date().timeIntervalSince(session.startedAt), message: "Recording ended because the Mac went to sleep.")) }
                 session.status = .interrupted; session.queuedForProcessing = true; try await store.save(session)
                 let finalized = try await pipeline.finalize(session, store: store)
@@ -306,7 +310,7 @@ final class AppModel: ObservableObject {
             } catch {
                 session.duration = max(session.duration, capture.stoppedElapsed)
                 session.status = .interrupted; session.error = error.localizedDescription; try? await store.save(session)
-                if coordinator.owns(token) { self.capture = nil; self.error = error.localizedDescription; working = false; microphoneLevel = 0; computerLevel = 0; await reload() }
+                if coordinator.owns(token) { self.capture = nil; self.error = error.localizedDescription; working = false; audioLevels.update(microphone: 0, computer: 0); await reload() }
             }
         }
     }

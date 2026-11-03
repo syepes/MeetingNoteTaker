@@ -27,8 +27,7 @@ final class AppModel: ObservableObject {
     func togglePause() {}
     func quit() {}
     @Published var preparingRecording = false
-    @Published var microphoneLevel: Float = 0.15
-    @Published var computerLevel: Float = 0.2
+    let audioLevels = AudioLevelState()
     @Published var progress = "Ready"
     @Published var error: String?
     func toggleRecording() {}
@@ -77,6 +76,13 @@ struct MenuLayoutChecks {
         panel.orderOut(nil); settle()
         precondition(!model.recordingMetersVisible, "Hidden menu must disable recording meters")
         print("Passed menu visibility/meter gating checks.")
+        var applicationUpdates = 0
+        let subscription = model.objectWillChange.sink { applicationUpdates += 1 }
+        for index in 0..<100 { model.audioLevels.update(microphone: Float(index)/100, computer: Float(index)/200) }
+        settle()
+        precondition(applicationUpdates == 0, "Meter changes must not invalidate the shared application model")
+        subscription.cancel()
+        print("Passed isolated meter state check (100 updates, no app-model invalidations).")
         check("initial oversized panel")
         let idleHeight = panel.frame.height
         for cycle in 1...3 {

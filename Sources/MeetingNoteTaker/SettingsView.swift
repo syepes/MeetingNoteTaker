@@ -55,8 +55,7 @@ struct GeneralSettings: View {
                 Button(model.audioCheckRunning ? "Checking audio…" : "Check audio for 10 seconds", action: model.checkAudio)
                     .disabled(model.audioCheckRunning || model.working || model.recording != nil || model.preparingRecording)
                 if model.audioCheckRunning {
-                    LevelRow(title: "Microphone", value: model.microphoneLevel, enabled: model.settings.microphoneEnabled)
-                    LevelRow(title: "Computer", value: model.computerLevel)
+                    LiveAudioLevels(state: model.audioLevels, microphoneEnabled: model.settings.microphoneEnabled)
                 }
                 Text(model.audioCheckStatus.isEmpty ? "Checks permissions, audio sources and free disk space. No recording or transcript is saved." : model.audioCheckStatus).font(.caption).foregroundStyle(.secondary)
             }

@@ -9,7 +9,7 @@ public struct CaptureTarget: Codable, Equatable, Sendable {
 }
 public enum CapturePhase: String, Sendable { case recording, paused, stopped }
 public enum SourceAvailability: String, Sendable { case available, waiting, recovering, disabled }
-public struct SourceHealth: Sendable {
+public struct SourceHealth: Sendable, Equatable {
     public var availability: SourceAvailability = .waiting
     public var droppedBuffers: UInt64 = 0
     public var lastBufferTime: Double?
@@ -17,13 +17,21 @@ public struct SourceHealth: Sendable {
     public var message: String = "Waiting for audio"
     public init() {}
 }
-public struct CaptureHealthSnapshot: Sendable {
+public struct CaptureHealthSnapshot: Sendable, Equatable {
     public var phase: CapturePhase = .stopped
     public var microphone = SourceHealth()
     public var computer = SourceHealth()
     public var availableBytes: Int64?
     public var storageWarning: String?
     public init() {}
+    /// Only values that change the recording UI. Raw timing and byte counters
+    /// remain available on the worker without publishing every health poll.
+    public var presentation: CaptureHealthSnapshot {
+        var result = self
+        result.microphone.lastBufferTime = nil; result.computer.lastBufferTime = nil
+        result.availableBytes = nil
+        return result
+    }
     public var summary: String {
         if let storageWarning { return storageWarning }
         if phase == .paused { return "Paused — elapsed time is preserved" }
