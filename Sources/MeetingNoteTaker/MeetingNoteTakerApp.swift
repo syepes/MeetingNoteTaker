@@ -89,6 +89,10 @@ struct MeetingList: View {
         } detail: {
             if let session = current {
                 VStack(alignment: .leading, spacing: 12) {
+                    if model.recording != nil, model.captureHealth.microphone.availability == .recovering || model.captureHealth.computer.availability == .recovering {
+                        Label("Current recording — " + model.captureHealthText, systemImage: "exclamationmark.triangle")
+                            .font(.callout).foregroundStyle(.orange)
+                    }
                     HStack {
                         VStack(alignment: .leading) { Text(session.stem).font(.title2.bold()); Text("\(MarkdownExporter.time(session.duration)) · \(session.speech.engine.title)").foregroundStyle(.secondary) }
                         Spacer()
@@ -132,6 +136,13 @@ struct MeetingList: View {
                     }.onChange(of: selected) { _, _ in analysisProfileChoice = "" }
                     if session.audioDeleted { Text("Audio deleted by retention policy. Analysis remains available from Markdown.").font(.caption).foregroundStyle(.secondary) }
                     if documentReader.document?.url == session.markdownURL, let hash = documentReader.document?.transcriptFingerprint, session.analyses.values.contains(where: { $0.transcriptFingerprint != hash }) { Label("Analysis is based on an older transcript. Regenerate to include your corrections.", systemImage: "arrow.clockwise").font(.caption).foregroundStyle(.orange) }
+                    if model.recording?.id == session.id {
+                        Text(model.captureHealthText).font(.caption).foregroundStyle(.orange)
+                    } else {
+                        ForEach(session.captureWarnings, id: \.self) { warning in
+                            Label(warning, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
+                        }
+                    }
                     if let error = session.error { Text(error).font(.caption).foregroundStyle(.orange) }
                     if session.status == .failed && session.deletionRequestedAt == nil {
                         Text("Retry starts transcription again using the model currently selected in Settings. Your recording is preserved.").font(.caption).foregroundStyle(.secondary)

@@ -203,6 +203,17 @@ public struct MeetingSession: Codable, Identifiable, Sendable {
     public var analysisCheckpoints: [AnalysisKind: AnalysisCheckpoint]?
     public var processingMetrics: [ProcessingProgress]?
     public var captureTarget: CaptureTarget?
+    public var captureDiagnostics: CaptureDiagnostics?
+    public var captureWarnings: [String] {
+        AudioSource.allCases.compactMap { source in
+            let detail = source == .microphone ? captureDiagnostics?.microphone : captureDiagnostics?.computer
+            if status != .recording && detail?.expected == true && detail?.acceptedFrames == 0 && (source == .microphone || detail?.lastFailure != nil || (detail?.rejectedBuffers ?? 0) > 0) { return "\(source.label): no audio was captured from this enabled source." }
+            if events.contains(where: { $0.source == source && ($0.kind == .gapBegan || $0.kind == .buffersDropped) }) {
+                return "\(source.label): recording contains capture gaps; missing audio cannot be transcribed."
+            }
+            return nil
+        }
+    }
     public var captureStartedAt: Date?
     public var profileSnapshot: MeetingProfileSnapshot?
     public var metadataProfile: MeetingProfileSnapshot?

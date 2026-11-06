@@ -38,7 +38,12 @@ final class ResilienceTests: XCTestCase {
     func testSilentPausedSessionKeepsStopDuration() throws {
         var s = try session(); s.duration = 0.3
         s.events = [.init(time: 0, message: "Pause", kind: .paused)]
-        for source in AudioSource.allCases { FileManager.default.createFile(atPath: s.stagingURL.appendingPathComponent(source.rawValue+".packets").path, contents: Data()) }
+        var packet = Data(); var time = 0.0, rate = 48000.0; var count: UInt32 = 1024
+        withUnsafeBytes(of: &time) { packet.append(contentsOf: $0) }
+        withUnsafeBytes(of: &rate) { packet.append(contentsOf: $0) }
+        withUnsafeBytes(of: &count) { packet.append(contentsOf: $0) }
+        packet.append(Data(count: 1024*4)) // Actual captured silence remains valid while paused.
+        for source in AudioSource.allCases { try packet.write(to: s.stagingURL.appendingPathComponent(source.rawValue+".packets")) }
         let result = try AudioFiles.finalize(s)
         XCTAssertEqual(result.duration, 0.3, accuracy: 1/48000)
         let file = try AVAudioFile(forReading: s.audioURL)

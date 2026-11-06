@@ -45,3 +45,6 @@ Meeting management additionally uses `SessionStore.trashMeeting` for resumable T
 
 
 Meeting playback uses [MeetingPlaybackController.swift](../Sources/MeetingCore/MeetingPlaybackController.swift) for isolated state and serialized player operations, and [MeetingPlaybackView.swift](../Sources/MeetingCore/MeetingPlaybackView.swift) for the native buttons and seek slider. The Meetings view supplies selection/file identity and window lifecycle events; AppModel coordinates release before file removal or replacement.
+
+
+[SourceRecovery.swift](../Sources/MeetingCore/SourceRecovery.swift) defines per-source retry budgets, configuration coalescing, buffer liveness and persisted capture diagnostics. The capture worker applies these policies to actual device lifecycle operations; the DSP ring reports accepted frames independently of rejected callbacks. Finalization checks durable packet streams before exporting audio.

@@ -37,6 +37,7 @@ public actor MeetingPipeline {
         let task = Task.detached(priority: .utility) { try AudioFiles.finalize(snapshot) }
         let result = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
         try Task.checkCancellation()
+        session.captureDiagnostics = result.diagnostics
         session.duration = result.duration; session.audioFingerprint = result.fingerprint; session.status = .recorded
         try await store.save(session); try MarkdownExporter.updateMetadata(session); return session
     }

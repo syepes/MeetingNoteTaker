@@ -4,15 +4,16 @@
 #include <cstring>
 #include <vector>
 #include <algorithm>
-struct MNTRing { MNTPacket packets[128]; std::atomic<uint32_t> read{0}, write{0}; std::atomic<uint64_t> dropped{0}; std::atomic<bool> muted{false}; std::atomic<double> last{-1}, pauseStart{-1}, pauseEnd{-1}; };
+struct MNTRing { MNTPacket packets[128]; std::atomic<uint32_t> read{0}, write{0}; std::atomic<uint64_t> dropped{0}; std::atomic<bool> muted{false}; std::atomic<uint64_t> accepted{0}; std::atomic<double> first{-1}, last{-1}, pauseStart{-1}, pauseEnd{-1}; };
 MNTRing *mnt_ring_create(void) { return new MNTRing; }
 void mnt_ring_destroy(MNTRing *r) { delete r; }
-void mnt_ring_reset(MNTRing *r) { r->read=0; r->write=0; r->dropped=0; r->last=-1; r->pauseStart=-1; r->pauseEnd=-1; }
+void mnt_ring_reset(MNTRing *r) { r->read=0; r->write=0; r->dropped=0; r->accepted=0; r->first=-1; r->last=-1; r->pauseStart=-1; r->pauseEnd=-1; }
 bool mnt_ring_push(MNTRing *r, const float *const *channels, uint32_t n, uint32_t stride, uint32_t frames, double rate, double time, bool muted) {
     if (!std::isfinite(time) || !std::isfinite(rate) || rate <= 0 || !frames) { r->dropped++; return false; }
-    r->last.store(time + frames/rate, std::memory_order_relaxed);
     uint32_t w = r->write.load(std::memory_order_relaxed), next = (w+1)%128;
     if (next == r->read.load(std::memory_order_acquire) || frames > MNT_MAX_FRAMES || !n) { r->dropped++; return false; }
+    if (!channels || !stride) { r->dropped++; return false; }
+    for(uint32_t c=0;c<n;c++) if(!channels[c]) { r->dropped++; return false; }
     auto &p=r->packets[w]; p.time=time; p.rate=rate; p.count=frames; muted = muted || r->muted.load(std::memory_order_relaxed);
     double pauseStart=r->pauseStart.load(), pauseEnd=r->pauseEnd.load();
     const double lastTime = time + (frames-1)/rate;
@@ -25,6 +26,9 @@ bool mnt_ring_push(MNTRing *r, const float *const *channels, uint32_t n, uint32_
     } else {
     for(uint32_t i=0;i<frames;i++){ double t=time+i/rate; bool paused=pauseStart>=0 && t>=pauseStart && (pauseEnd<0 || t<pauseEnd); float x=0; if(!muted && !paused) for(uint32_t c=0;c<n;c++) x+=channels[c][i*stride]; p.samples[i]=x/n; }
     }
+    if(r->accepted.load()==0) r->first.store(time);
+    r->accepted.fetch_add(frames);
+    r->last.store(time + frames/rate, std::memory_order_release);
     r->write.store(next,std::memory_order_release); return true;
 }
 bool mnt_ring_pop(MNTRing *r, MNTPacket *p) {
@@ -62,3 +66,6 @@ float mnt_reduce_echo(float *mic,const float *ref,uint32_t count,uint32_t rate){
 double mnt_ring_last_time(MNTRing *r) { return r->last.load(); }
 void mnt_ring_pause(MNTRing *r, double time) { r->pauseEnd.store(-1); r->pauseStart.store(time); }
 void mnt_ring_resume(MNTRing *r, double time) { r->pauseEnd.store(time); }
+
+uint64_t mnt_ring_accepted_frames(MNTRing *r) { return r->accepted.load(); }
+double mnt_ring_first_time(MNTRing *r) { return r->first.load(); }

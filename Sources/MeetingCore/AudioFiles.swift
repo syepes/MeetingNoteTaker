@@ -26,6 +26,18 @@ final class PacketReader {
         let position = (target-time)*rate; let index = min(samples.count-1, Int(position)); let next = min(samples.count-1,index+1)
         let alpha = Float(position-Double(index)); return samples[index]*(1-alpha) + samples[next]*alpha
     }
+    static func statistics(_ url: URL) throws -> SourceCaptureDiagnostics {
+        let reader = try PacketReader(url)
+        var detail = SourceCaptureDiagnostics(expected: true)
+        while !reader.eof {
+            try Task.checkCancellation()
+            if detail.firstBufferTime == nil { detail.firstBufferTime = reader.time }
+            detail.acceptedFrames += UInt64(reader.samples.count)
+            detail.lastBufferTime = max(detail.lastBufferTime ?? 0, reader.time + Double(reader.samples.count)/reader.rate)
+            try reader.advance()
+        }
+        return detail
+    }
     static func duration(_ url: URL) throws -> Double {
         let reader = try PacketReader(url); var end: Double = 0
         while !reader.eof { end = max(end, reader.time + Double(reader.samples.count)/reader.rate); try reader.advance() }
@@ -33,17 +45,29 @@ final class PacketReader {
     }
 }
 public enum AudioFiles {
-    public static func finalize(_ session: MeetingSession) throws -> (duration: Double, fingerprint: String) {
+    public static func finalize(_ session: MeetingSession) throws -> (duration: Double, fingerprint: String, diagnostics: CaptureDiagnostics?) {
+        try Task.checkCancellation()
+        let micURL = session.stagingURL.appendingPathComponent("microphone.packets")
+        let computerURL = session.stagingURL.appendingPathComponent("computer.packets")
+        let micStats = try PacketReader.statistics(micURL), computerStats = try PacketReader.statistics(computerURL)
+        guard micStats.acceptedFrames > 0 || computerStats.acceptedFrames > 0 else {
+            throw MeetingError.message("No audio buffers were captured from either source. Recording files were preserved for diagnosis; check audio permissions and devices.")
+        }
+        var diagnostics = session.captureDiagnostics
+        if diagnostics != nil {
+            diagnostics?.microphone.acceptedFrames = micStats.acceptedFrames
+            diagnostics?.microphone.firstBufferTime = micStats.firstBufferTime; diagnostics?.microphone.lastBufferTime = micStats.lastBufferTime
+            diagnostics?.computer.acceptedFrames = computerStats.acceptedFrames
+            diagnostics?.computer.firstBufferTime = computerStats.firstBufferTime; diagnostics?.computer.lastBufferTime = computerStats.lastBufferTime
+        }
         let receipt = session.stagingURL.appendingPathComponent("finalized.sha256")
         if let expected = try? String(contentsOf: receipt, encoding: .utf8), FileManager.default.fileExists(atPath: session.audioURL.path),
            (try? audioFingerprint(session.audioURL)) == expected {
             let file = try AVAudioFile(forReading: session.audioURL)
             guard file.processingFormat.channelCount == 2 else { throw MeetingError.message("Recovery audio has an invalid channel layout.") }
-            return (Double(file.length)/file.processingFormat.sampleRate, expected)
+            return (Double(file.length)/file.processingFormat.sampleRate, expected, diagnostics)
         }
-        let micURL = session.stagingURL.appendingPathComponent("microphone.packets")
-        let computerURL = session.stagingURL.appendingPathComponent("computer.packets")
-        let duration = try max(session.duration, max(PacketReader.duration(micURL), PacketReader.duration(computerURL)))
+        let duration = max(session.duration, max(micStats.lastBufferTime ?? 0, computerStats.lastBufferTime ?? 0))
         guard duration > 0 else { throw MeetingError.message("No audio was captured. Check microphone and system-audio permissions.") }
         let mic = try PacketReader(micURL); let computer = try PacketReader(computerURL)
         let temp = session.stagingURL.appendingPathComponent("final.m4a")
@@ -84,7 +108,7 @@ public enum AudioFiles {
             guard size == 0 else { throw MeetingError.message("The reserved audio path already contains data; recovery will not overwrite it.") }
             _ = try FileManager.default.replaceItemAt(session.audioURL, withItemAt: temp)
         } else { try FileManager.default.moveItem(at: temp, to: session.audioURL) }
-        return (duration, checksum)
+        return (duration, checksum, diagnostics)
     }
     /// Read only one bounded window; the full meeting is never materialized in memory.
     public static func samples(_ url: URL, channel: Int, start: Double, duration: Double, rate: Double = 16000) throws -> [Float] {

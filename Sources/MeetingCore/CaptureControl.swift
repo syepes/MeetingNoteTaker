@@ -26,6 +26,7 @@ actor CaptureControl {
     private var acceptsUpdates = false
     public var metersEnabled = false { didSet { let value = metersEnabled; enqueue { $0.metersEnabled = value } } }
     public var microphoneEnabled = true { didSet { let value = microphoneEnabled; enqueue { $0.microphoneEnabled = value } } }
+    public private(set) var diagnostics: CaptureDiagnostics?
     public private(set) var health = CaptureHealthSnapshot()
     public private(set) var wallStart = Date()
     public private(set) var fatalError: String?
@@ -66,6 +67,7 @@ actor CaptureControl {
     }
     private func readState() async {
         let state = await worker.state
+        diagnostics = state.diagnostics
         health = state.health; wallStart = state.wallStart; fatalError = state.fatalError; stoppedElapsed = state.stoppedElapsed; startHost = state.startHost; running = state.running
     }
     public func start(session: MeetingSession, microphoneID: String) async throws {

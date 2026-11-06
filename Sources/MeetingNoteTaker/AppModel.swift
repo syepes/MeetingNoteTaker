@@ -265,6 +265,7 @@ final class AppModel: ObservableObject {
             defer { preparingRecording = false }
             do {
                 var session = try await store.reserve(settings: recordingSettings, profile: selectedProfile)
+                session.captureDiagnostics = .init(microphoneUID: nil, microphoneEnabled: recordingSettings.microphoneEnabled)
                 if recordingSettings.analysis.automatic && recordingSettings.analysis.engine != .unconfigured {
                     session.analysisSnapshot = selectedProfile.configuring(recordingSettings.analysis)
                     session.promptSnapshot = selectedProfile.definitions.filter(\.enabled)
@@ -272,7 +273,7 @@ final class AppModel: ObservableObject {
                 }
                 try await store.save(session)
                 let capture = CoreAudioCapture(); self.capture = capture
-                capture.microphoneEnabled = settings.microphoneEnabled
+                capture.microphoneEnabled = recordingSettings.microphoneEnabled
                 capture.metersEnabled = recordingMetersVisible
                 capture.onLevels = { [weak self] mic, computer in self?.audioLevels.update(microphone: mic, computer: computer) }
                 capture.onHealth = { [weak self] health in
@@ -287,8 +288,9 @@ final class AppModel: ObservableObject {
                 refreshMicrophones()
                 refreshCaptureApplications()
                 working = true; progress = "Requesting audio access…"
-                do { try await capture.start(session: session, microphoneID: settings.microphoneID) }
+                do { try await capture.start(session: session, microphoneID: recordingSettings.microphoneID) }
                 catch { var failed = session; failed.status = .interrupted; failed.error = error.localizedDescription; try await store.save(failed); throw error }
+                session.captureDiagnostics = capture.diagnostics
                 session.captureStartedAt = capture.wallStart; try await store.save(session)
                 recording = session; recordingPaused = false; startedAt = capture.wallStart; progress = capture.health.summary; working = false
                 if let failure = capture.fatalError { error = failure; stopRecording(interrupted: true) }
@@ -303,13 +305,16 @@ final class AppModel: ObservableObject {
         job = Task {
             do {
                 session.events += try await capture.stop(); session.duration = capture.stoppedElapsed
+                session.captureDiagnostics = capture.diagnostics
                 self.capture = nil; audioLevels.update(microphone: 0, computer: 0)
                 if interrupted { session.events.append(.init(time: Date().timeIntervalSince(session.startedAt), message: "Recording ended because the Mac went to sleep.")) }
                 session.status = .interrupted; session.queuedForProcessing = true; try await store.save(session)
+                try MarkdownExporter.updateMetadata(session)
                 let finalized = try await pipeline.finalize(session, store: store)
                 await reload(); guard coordinator.owns(token) else { return }; working = false
                 if !interrupted { process(finalized, resume: true) }
             } catch {
+                session.captureDiagnostics = capture.diagnostics
                 session.duration = max(session.duration, capture.stoppedElapsed)
                 session.status = .interrupted; session.error = error.localizedDescription; try? await store.save(session)
                 if coordinator.owns(token) { self.capture = nil; self.error = error.localizedDescription; working = false; audioLevels.update(microphone: 0, computer: 0); await reload() }

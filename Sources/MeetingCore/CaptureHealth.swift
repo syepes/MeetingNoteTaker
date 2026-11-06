@@ -40,7 +40,7 @@ public struct CaptureHealthSnapshot: Sendable, Equatable {
         return "Recording"
     }
 }
-public enum CaptureEventKind: String, Codable, Sendable { case started, stopped, paused, resumed, gapBegan, gapEnded, buffersDropped, storageWarning, heartbeat, microphoneChanged }
+public enum CaptureEventKind: String, Codable, Sendable { case captureDiagnostic, recoveryAttempt, started, stopped, paused, resumed, gapBegan, gapEnded, buffersDropped, storageWarning, heartbeat, microphoneChanged }
 
 /// Compact append-only JSON lines: a crash can lose at most the unsynced tail.
 /// Only complete lines are replayed. Events are timestamps and diagnostics, never audio.

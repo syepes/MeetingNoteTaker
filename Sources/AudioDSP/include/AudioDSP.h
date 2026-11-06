@@ -17,6 +17,8 @@ uint64_t mnt_ring_dropped(MNTRing *ring);
 void mnt_ring_set_muted(MNTRing *ring, bool muted);
 bool mnt_ring_is_muted(MNTRing *ring);
 double mnt_ring_last_time(MNTRing *ring);
+uint64_t mnt_ring_accepted_frames(MNTRing *ring);
+double mnt_ring_first_time(MNTRing *ring);
 void mnt_ring_pause(MNTRing *ring, double time);
 void mnt_ring_resume(MNTRing *ring, double time);
 // Conservative offline reference cancellation. Returns estimated echo gain.

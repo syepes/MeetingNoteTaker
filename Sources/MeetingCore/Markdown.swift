@@ -27,6 +27,10 @@ public enum MarkdownExporter {
         ---
         """
         var extra = ""
+        if let diagnostics = s.captureDiagnostics {
+            extra += "capture_microphone_uid: \(diagnostics.microphoneUID.map(quote) ?? "null")\n"
+        }
+        extra += "capture_warnings: [" + s.captureWarnings.map(quote).joined(separator: ", ") + "]\n"
         if let p = s.metadataProfile { extra += "profile_id: \(quote(p.id.uuidString))\nprofile_name: \(quote(p.name))\nprofile_revision: \(p.revision)\n" }
         if let tags = s.tags { extra += "tags: [" + tags.map(quote).joined(separator: ", ") + "]\n" }
         if !extra.isEmpty { text = String(text.dropLast(3)) + extra + "---" }
@@ -87,7 +91,7 @@ public enum MarkdownExporter {
     }
     public static func renderTranscript(_ s: MeetingSession) -> String {
         var result = "## Transcript\n\n"
-        for event in s.events where event.kind != .heartbeat { result += "> [\(time(event.time))] \(event.message.replacingOccurrences(of: "\n", with: " "))\n\n" }
+        for event in s.events where event.kind != .heartbeat && event.kind != .recoveryAttempt && event.kind != .captureDiagnostic { result += "> [\(time(event.time))] \(event.message.replacingOccurrences(of: "\n", with: " "))\n\n" }
         for segment in s.segments.sorted(by: { $0.start == $1.start ? $0.source.rawValue < $1.source.rawValue : $0.start < $1.start }) {
             result += "<!-- segment:\(segment.id)|\(segment.source.rawValue)|\(segment.start)|\(segment.end)|\(segment.approximate) -->\n"
             result += "<a id=\"segment-\(segment.id)\"></a>\n### [\(time(segment.start))–\(time(segment.end))] \(segment.source.label)\(segment.approximate ? " (approximate)" : "")\n\n\(safeText(segment.text))\n\n"

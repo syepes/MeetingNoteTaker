@@ -83,3 +83,10 @@ Validation: 194 core tests, 13 optional model/fixture/benchmark skips, no failur
 ### Seekable playback validation
 
 `MeetingPlaybackTests` covers seek clamping, stopped and playing scrubs, Stop/reset, completion/replay, rapid selection and stale loads, release, time labels, corrupt files and loading/seeking a generated silent audio file without autoplay. Transport state tests use an injected player, so they do not depend on an audio output device. Native light/dark control snapshots are written to `.build/playback-light.png` and `.build/playback-dark.png`. Real-device audible playback and manual VoiceOver/keyboard interactions remain smoke tests; automated checks do not claim these passed.
+
+
+### Source recovery validation
+
+`SourceRecoveryTests` exercises notification coalescing, bounded backoff after successful-but-empty starts, ten-second recovery stability, independent source budgets, rate-limited reconnect attempts, pinned microphone identity across device-ID changes, accepted versus rejected buffers, empty-capture preservation, partial stereo export and backward-compatible diagnostics. The existing pause/silence regression uses valid silent packets; empty streams are now explicitly rejected.
+
+Capture journals record attempt durations and slow (100 ms or longer) audio checkpoint synchronization. These contain no spoken content and are excluded from rendered transcripts. During live investigation, correlate these events with app/coreaudiod/WindowServer sampling and disk activity. USB unplug/replug, headset profile changes, application relaunch, permissions and OS-wide lag require live device validation; simulated tests do not prove those integration behaviors or an OS-lag fix. No device settings or existing recordings are changed by the automated suite.
