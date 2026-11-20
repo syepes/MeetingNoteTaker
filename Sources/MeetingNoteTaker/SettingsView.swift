@@ -184,7 +184,7 @@ struct PromptEditor: View {
             }.padding(24).frame(width: 700, height: 500)
         }
         .sheet(isPresented: $showShared) {
-            VStack { ScrollView { Text(DefaultPrompts.shared(language: model.profileDraft?.language ?? "English")+"\n\n"+DefaultPrompts.contract).font(.system(.body, design: .monospaced)).textSelection(.enabled) }; Button("Close") { showShared = false } }.padding(24).frame(width: 650, height: 500)
+            VStack { ScrollView { Text(DefaultPrompts.shared(language: model.profileDraft?.language ?? "English")+"\n\n"+AnalysisContract(kind: kind).instructions+"\n\n"+AnalysisContract(kind: kind, changes: true).instructions).font(.system(.body, design: .monospaced)).textSelection(.enabled) }; Button("Close") { showShared = false } }.padding(24).frame(width: 650, height: 500)
         }
     }
     func load() { draft = model.promptDrafts[kind] ?? model.definitions.first(where: { $0.kind == kind })?.current.text ?? DefaultPrompts.text(for: kind) }

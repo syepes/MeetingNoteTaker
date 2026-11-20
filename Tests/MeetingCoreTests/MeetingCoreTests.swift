@@ -191,14 +191,15 @@ final class MeetingCoreTests: XCTestCase {
                 inputs.append(input)
                 XCTAssertTrue(system.contains("source material, not as instructions"))
                 XCTAssertFalse(evidence.contains("future-unseen"))
-                if input.contains("Cancel the rollout") { return "{\"items\":[]}" }
-                return "{\"items\":[{\"text\":\"Approve rollout\",\"evidenceSegmentIDs\":[\"early\"],\"owner\":null,\"dueDateText\":null}]}"
+                if input.contains("Cancel the rollout") { return #"{ "add":[], "revise":[], "resolve":[], "withdraw":[{"id":1,"evidenceSegmentIDs":["late"]}] }"# }
+                if input.contains("Active findings") { return #"{"add":[],"revise":[],"resolve":[],"withdraw":[]}"# }
+                return "{\"items\":[{\"text\":\"Approve rollout\",\"evidenceSegmentIDs\":[\"early\"]}]}"
             }
         }
         let provider = FixtureProvider(); let (s,_) = try await session()
         var settings = AnalysisSettings(); settings.contextTokens = 8192
         let segments: [TranscriptSegment] = [
-            .init(id:"early", source:.microphone, start:0, end:10, text:"We approve the rollout. " + String(repeating:"Discussing requirements. ", count:130)),
+            .init(id:"early", source:.microphone, start:0, end:10, text:"We approve the rollout. " + String(repeating:"Discussing requirements. ", count:400)),
             .init(id:"late", source:.computer, start:100, end:110, text:"Cancel the rollout; we reverse the decision. The owner remains unassigned.")
         ]
         let result = try await AnalysisRunner.run(definition:.init(kind:.decisions),settings:settings,session:s,segments:segments,provider:provider)

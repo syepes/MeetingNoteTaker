@@ -24,6 +24,9 @@ public struct ProcessingProgress: Codable, Sendable {
 public struct AnalysisCheckpoint: Codable, Sendable {
     public var identity: String
     public var consumedUnits: Int
+    public var formatVersion: Int? = nil
+    public var findingIDs: [Int]? = nil
+    public var nextFindingID: Int? = nil
     public var findings: [AnalysisItem]
     public var requests: Int
 }

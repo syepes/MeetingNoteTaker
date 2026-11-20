@@ -11,6 +11,7 @@ final class LocalPerformanceTests: XCTestCase {
         func prepare() async throws { try await inner.prepare() }
         func cancel() { inner.cancel() }
         func shutdown() async { await inner.shutdown() }
+        func configureContract(_ contract: AnalysisContract) { inner.configureContract(contract) }
         func configureEvidence(_ ids: Set<String>) { inner.configureEvidence(ids) }
         func countTokens(system: String, input: String) async throws -> InputTokenCount { counts += 1; return try await inner.countTokens(system: system, input: input) }
         func generate(system: String, input: String) async throws -> String { requests += 1; return try await inner.generate(system: system, input: input) }

@@ -135,7 +135,9 @@ public enum MarkdownExporter {
         fingerprint(segments.map { "\($0.id)|\($0.source.rawValue)|\($0.start)|\($0.end)|\($0.text)" }.joined(separator: "\n"))
     }
     public static func renderAnalysis(_ result: AnalysisResult, segments: [TranscriptSegment]) -> String {
-        let lookup = Dictionary(segments.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        renderAnalysis(result, lookup: Dictionary(segments.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }))
+    }
+    static func renderAnalysis(_ result: AnalysisResult, lookup: [String: TranscriptSegment]) -> String {
         var text = "## \(result.kind.title)\n\n"
         text += "<!-- analysis: \(result.provider) | \(result.model) | prompt \(result.promptRevision.id) | source \(result.transcriptFingerprint) | \(ISO8601DateFormatter().string(from: result.generatedAt)) -->\n\n"
         if let p = result.profile { text += "<!-- profile: \(p.id.uuidString) | revision \(p.revision) | \(safeText(p.name).replacingOccurrences(of: "-->", with: "--&gt;")) -->\n\n" }
@@ -159,13 +161,16 @@ public enum MarkdownExporter {
         return text.trimmingCharacters(in: .newlines)
     }
     public static func exportAnalysis(_ result: AnalysisResult, session: MeetingSession, segments: [TranscriptSegment]) throws {
+        try exportAnalysis(result, session: session, rendered: renderAnalysis(result, segments: segments))
+    }
+    static func exportAnalysis(_ result: AnalysisResult, session: MeetingSession, rendered: String) throws {
         let old = try String(contentsOf: session.markdownURL, encoding: .utf8)
-        let current = try readTranscript(session.markdownURL)
+        let current = try readTranscript(markdown: old)
         guard transcriptFingerprint(current) == result.transcriptFingerprint else { throw MeetingError.message("Transcript changed during analysis. Result was not saved; regenerate it.") }
         let existing = try content(result.kind.rawValue, in: old)
         let expected = session.analyses[result.kind].map { $0.renderedMarkdown ?? renderAnalysis($0, segments: session.segments) } ?? "## \(result.kind.title)\n\nNot generated."
         guard existing == expected else { throw MeetingError.message("The \(result.kind.title) section was edited externally. Your edits were preserved.") }
-        var next = try replacing(result.kind.rawValue, in: old, with: renderAnalysis(result, segments: segments))
+        var next = try replacing(result.kind.rawValue, in: old, with: rendered)
         if let profile = result.profile { var updated = session; updated.metadataProfile = profile; next = try replacing("metadata", in: next, with: metadata(updated)) }
         try commit(next, replacing: old, at: session.markdownURL)
     }

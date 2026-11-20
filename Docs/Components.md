@@ -54,3 +54,6 @@ Meeting playback uses [MeetingPlaybackController.swift](../Sources/MeetingCore/M
 
 
 [SourceRecovery.swift](../Sources/MeetingCore/SourceRecovery.swift) defines per-source retry budgets, configuration coalescing, buffer liveness and persisted capture diagnostics. The capture worker applies these policies to actual device lifecycle operations; the DSP ring reports accepted frames independently of rejected callbacks. Finalization checks durable packet streams before exporting audio.
+
+
+Analysis prepares one transcript snapshot per job. Each enabled analysis uses its own prompt and output contract. Requests prefer turn and sentence boundaries and keep evidence IDs when splitting a turn. Token fitting checks the largest candidate first and reserves space for the output and a bounded correction. The first chunk produces findings; later chunks add, revise, resolve or withdraw findings using stable numeric IDs. A malformed response gets one budget-checked correction before the job fails. Version 3 checkpoints retain the active findings and ID counter. Older pending checkpoints restart that analysis, while completed Markdown sections retain their original content.

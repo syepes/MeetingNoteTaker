@@ -109,7 +109,7 @@ public actor MeetingPipeline {
     public func analyze(_ original: MeetingSession, settings: AnalysisSettings, definitions: [AnalysisDefinition], store: SessionStore, preview: Bool = false, progress: @escaping @Sendable (String) async -> Void) async throws -> (MeetingSession, [AnalysisResult]) {
         guard original.deletionRequestedAt == nil else { throw MeetingError.message("This meeting is pending deletion.") }
         var session = original
-        let segments = try MarkdownExporter.readTranscript(session.markdownURL)
+        let snapshot = AnalysisSnapshot(try MarkdownExporter.readTranscript(session.markdownURL))
         let provider = analysisFactory(settings); analysisProvider = provider
         do {
             var results: [AnalysisResult] = []
@@ -123,7 +123,7 @@ public actor MeetingPipeline {
             let loadSeconds = Date().timeIntervalSince(loadStarted)
             for definition in definitions {
                 try Task.checkCancellation()
-                var result = try await AnalysisRunner.run(definition: definition, settings: settings, session: session, segments: segments, provider: provider,
+                var result = try await AnalysisRunner.run(definition: definition, settings: settings, session: session, snapshot: snapshot, provider: provider,
                     checkpoint: preview ? nil : session.analysisCheckpoints?[definition.kind],
                     saveCheckpoint: { checkpoint in
                         guard !preview else { return }
@@ -135,8 +135,9 @@ public actor MeetingPipeline {
                 result.processing?.peakResidentBytes = (provider as? ChatAnalysisProvider)?.peakResidentBytes
                 result.processing?.modelLoadSeconds = loadSeconds
                 if !preview {
-                    result.renderedMarkdown = MarkdownExporter.renderAnalysis(result, segments: segments)
-                    try MarkdownExporter.exportAnalysis(result, session: session, segments: segments)
+                    let rendered = MarkdownExporter.renderAnalysis(result, lookup: snapshot.lookup)
+                    result.renderedMarkdown = rendered
+                    try MarkdownExporter.exportAnalysis(result, session: session, rendered: rendered)
                     session.metadataProfile = result.profile ?? session.metadataProfile
                     session.analysisCheckpoints?[result.kind] = nil
                     session.analyses[result.kind] = result; session.analysisPending.removeAll { $0 == result.kind }; session.error = nil

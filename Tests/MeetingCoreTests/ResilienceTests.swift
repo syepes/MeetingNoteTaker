@@ -134,7 +134,8 @@ final class ResilienceTests: XCTestCase {
         func generate(system: String, input: String) async throws -> String {
             inputs.append(input)
             if overflow > 0 { overflow -= 1; throw HTTPFailure(status: 400, data: Data("context_length_exceeded".utf8)) }
-            return malformed ? "{broken" : "{\"items\":[]}"
+            if malformed { return "{broken" }
+            return input.contains("Active findings") ? #"{"add":[],"revise":[],"resolve":[],"withdraw":[]}"# : #"{"items":[]}"#
         }
     }
     func testOverflowShrinksPendingChunkAndResumesCheckpoint() async throws {
