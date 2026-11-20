@@ -53,15 +53,22 @@ public actor MeetingPipeline {
             await progress("Loading \(session.speech.engine.title)…"); try await provider.prepare()
             let loadSeconds = Date().timeIntervalSince(started)
             let chunks = Int(ceil(session.duration/25))
+            var reader: AudioWindowReader?
+            var completedKeys = Set(session.completedChunks)
             for index in 0..<chunks {
                 try Task.checkCancellation()
                 let offset = Double(index)*25; let duration = min(25,session.duration-offset)
-                let computer = try AudioFiles.samples(session.audioURL, channel: 1, start: offset, duration: duration)
-                for source in AudioSource.allCases {
+                let pending = AudioSource.allCases.filter { !completedKeys.contains("\($0.rawValue)-\(index)") }
+                guard !pending.isEmpty else { continue }
+                if reader == nil { reader = try AudioWindowReader(session.audioURL) }
+                var channels = pending.map { $0 == .microphone ? 0 : 1 }
+                if session.echoReduction && pending == [.microphone] { channels.append(1) }
+                let window = try reader!.read(channels: channels, start: offset, duration: duration)
+                let computer = window[1] ?? []
+                for source in pending {
                     let key = "\(source.rawValue)-\(index)"
-                    if session.completedChunks.contains(key) { continue }
                     try Task.checkCancellation(); await progress("\(source.label) · \(index+1)/\(chunks)")
-                    var samples = source == .computer ? computer : try AudioFiles.samples(session.audioURL, channel: 0, start: offset, duration: duration)
+                    var samples = source == .computer ? computer : (window[0] ?? [])
                     if source == .microphone && session.echoReduction { AudioFiles.reduceEcho(microphone: &samples, computer: computer) }
                     if AudioFiles.containsSpeechEnergy(samples) {
                         let segments: [TranscriptSegment]
@@ -78,6 +85,7 @@ public actor MeetingPipeline {
                         guard segments.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= offset && $0.end >= $0.start && $0.end <= offset+duration+0.1 }) else { throw MeetingError.message("The transcription engine returned invalid timestamps.") }
                         session.segments += segments
                     }
+                    completedKeys.insert(key)
                     session.completedChunks.append(key)
                     let completed = session.completedChunks.count
                     let metric = ProcessingProgress(jobID: jobID, stage: "transcription", completed: completed-previousCompleted, total: chunks*2-previousCompleted, elapsed: Date().timeIntervalSince(started)-loadSeconds, modelLoadSeconds: loadSeconds)

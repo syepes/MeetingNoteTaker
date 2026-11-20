@@ -110,32 +110,8 @@ public enum AudioFiles {
         } else { try FileManager.default.moveItem(at: temp, to: session.audioURL) }
         return (duration, checksum, diagnostics)
     }
-    /// Read only one bounded window; the full meeting is never materialized in memory.
     public static func samples(_ url: URL, channel: Int, start: Double, duration: Double, rate: Double = 16000) throws -> [Float] {
-        let input = try AVAudioFile(forReading: url)
-        let format = input.processingFormat
-        guard channel >= 0, channel < Int(format.channelCount) else { throw MeetingError.message("Invalid source channel.") }
-        input.framePosition = min(input.length, AVAudioFramePosition(start * format.sampleRate))
-        let count = min(Int(input.length-input.framePosition), Int(duration * format.sampleRate))
-        guard count > 0 else { return [] }
-        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count))!
-        try input.read(into: buffer, frameCount: AVAudioFrameCount(count))
-        let monoFormat = AVAudioFormat(standardFormatWithSampleRate: format.sampleRate, channels: 1)!
-        let mono = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: buffer.frameLength)!
-        mono.frameLength = buffer.frameLength
-        guard let data = buffer.floatChannelData else { throw MeetingError.message("Audio decoder did not provide Float32 samples.") }
-        if format.isInterleaved { for i in 0..<Int(buffer.frameLength) { mono.floatChannelData![0][i] = data[0][i*Int(format.channelCount)+channel] } }
-        else { mono.floatChannelData![0].update(from: data[channel], count: Int(buffer.frameLength)) }
-        let target = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)!
-        guard let converter = AVAudioConverter(from: monoFormat, to: target) else { throw MeetingError.message("Cannot convert audio format.") }
-        let converted = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: AVAudioFrameCount(ceil(Double(count)*rate/format.sampleRate)+1024))!
-        var fed = false; var error: NSError?
-        converter.convert(to: converted, error: &error) { _, status in
-            if fed { status.pointee = .endOfStream; return nil }
-            fed = true; status.pointee = .haveData; return mono
-        }
-        if let error { throw error }
-        return Array(UnsafeBufferPointer(start: converted.floatChannelData![0], count: Int(converted.frameLength)))
+        try AudioWindowReader(url).read(channels: [channel], start: start, duration: duration, rate: rate)[channel] ?? []
     }
     public static func writeWAV(_ samples: [Float], to url: URL, rate: Double = 16000) throws {
         let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)!
@@ -154,5 +130,53 @@ public enum AudioFiles {
         guard !samples.isEmpty else { return false }
         let energy = samples.reduce(0.0) { $0 + Double($1*$1) } / Double(samples.count)
         return energy > 0.00000025 // silence gate, not a semantic voice classifier
+    }
+}
+
+/// A job owns one decoder. Both source channels come from the same bounded PCM window.
+final class AudioWindowReader {
+    private let input: AVAudioFile
+    private(set) var windowsRead = 0
+
+    init(_ url: URL) throws { input = try AVAudioFile(forReading: url) }
+
+    func read(channels: [Int], start: Double, duration: Double, rate: Double = 16000) throws -> [Int: [Float]] {
+        let format = input.processingFormat
+        guard channels.allSatisfy({ $0 >= 0 && $0 < Int(format.channelCount) }) else {
+            throw MeetingError.message("Invalid source channel.")
+        }
+        guard !channels.isEmpty else { return [:] }
+        let position = min(input.length, AVAudioFramePosition(start * format.sampleRate))
+        if input.framePosition != position { input.framePosition = position }
+        let count = min(Int(input.length - position), Int(duration * format.sampleRate))
+        guard count > 0 else { return [:] }
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count))!
+        try input.read(into: buffer, frameCount: AVAudioFrameCount(count))
+        windowsRead += 1
+        var result: [Int: [Float]] = [:]
+        for channel in channels {
+            result[channel] = try convert(buffer, channel: channel, rate: rate)
+        }
+        return result
+    }
+
+    private func convert(_ buffer: AVAudioPCMBuffer, channel: Int, rate: Double) throws -> [Float] {
+        let format = buffer.format
+        let monoFormat = AVAudioFormat(standardFormatWithSampleRate: format.sampleRate, channels: 1)!
+        let mono = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: buffer.frameLength)!
+        mono.frameLength = buffer.frameLength
+        guard let data = buffer.floatChannelData else { throw MeetingError.message("Audio decoder did not provide Float32 samples.") }
+        if format.isInterleaved { for i in 0..<Int(buffer.frameLength) { mono.floatChannelData![0][i] = data[0][i*Int(format.channelCount)+channel] } }
+        else { mono.floatChannelData![0].update(from: data[channel], count: Int(buffer.frameLength)) }
+        let target = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)!
+        guard let converter = AVAudioConverter(from: monoFormat, to: target) else { throw MeetingError.message("Cannot convert audio format.") }
+        let converted = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: AVAudioFrameCount(ceil(Double(buffer.frameLength)*rate/format.sampleRate)+1024))!
+        var fed = false; var error: NSError?
+        converter.convert(to: converted, error: &error) { _, status in
+            if fed { status.pointee = .endOfStream; return nil }
+            fed = true; status.pointee = .haveData; return mono
+        }
+        if let error { throw error }
+        return Array(UnsafeBufferPointer(start: converted.floatChannelData![0], count: Int(converted.frameLength)))
     }
 }

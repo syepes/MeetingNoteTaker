@@ -2,7 +2,6 @@ import Foundation
 import AVFoundation
 import CoreAudio
 import AudioDSP
-import Accelerate
 
 public struct MicrophoneDevice: Identifiable, Sendable { public var id: String; public var name: String; public var objectID: AudioDeviceID }
 public enum AudioDevices {
@@ -45,139 +44,6 @@ public enum AudioDevices {
 final class CaptureRings: @unchecked Sendable {
     let mic = mnt_ring_create()!, computer = mnt_ring_create()!
     deinit { mnt_ring_destroy(mic); mnt_ring_destroy(computer) }
-}
-
-/// The audio callbacks only copy into preallocated C++ rings. Disk access,
-/// journaling and allocation are confined to this serial writer queue.
-final class CaptureWriter: @unchecked Sendable {
-    let queue = DispatchQueue(label: "MeetingNoteTaker.audio.writer", qos: .userInitiated)
-    let rings: CaptureRings
-    let folder: URL
-    let startHost: Double
-    var handles: [AudioSource: FileHandle] = [:]
-    var journal: CaptureEventJournal?
-    var events: [CaptureEvent] = []
-    var timer: DispatchSourceTimer?
-    var failure: Error?
-    var lastSync: Double = 0
-    var batches: [AudioSource: Data] = [:]
-    var metersEnabled = false
-    var lastMeterUpdate: Double = 0
-    var meterPeaks: [Float] = [0, 0]
-    var pausedAt: Double?
-    var pauses: [(Double, Double)] = []
-    var onUpdate: (@Sendable (Float, Float, Int64?, String?) -> Void)?
-    init(rings: CaptureRings, folder: URL, startHost: Double, session: MeetingSession?) throws {
-        self.rings = rings; self.folder = folder; self.startHost = startHost
-        if let session {
-            journal = try CaptureEventJournal(directory: session.stagingURL)
-            for source in AudioSource.allCases {
-                let url = session.stagingURL.appendingPathComponent(source.rawValue + ".packets")
-                FileManager.default.createFile(atPath: url.path, contents: nil)
-                handles[source] = try FileHandle(forWritingTo: url)
-            }
-        }
-    }
-    func start() {
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(30), leeway: .milliseconds(3))
-        timer.setEventHandler { [weak self] in self?.drain() }; self.timer = timer; timer.resume()
-    }
-    func event(_ event: CaptureEvent) { queue.async { self.append(event) } }
-    private func append(_ event: CaptureEvent) {
-        if event.kind == .paused { pausedAt = event.time }
-        if event.kind == .resumed, let start = pausedAt { pauses.append((start, event.time)); pausedAt = nil }
-        // Heartbeats preserve elapsed silence on crash without filling UI/Markdown.
-        if event.kind != .heartbeat { events.append(event) }
-        do { try journal?.append(event, synchronize: event.kind != .heartbeat) }
-        catch { failure = error }
-    }
-    func drain() {
-        var levels: [Float] = []
-        for (source, ring) in [(AudioSource.microphone, rings.mic), (.computer, rings.computer)] {
-            var packet = MNTPacket(); var peak: Float = 0
-            var data = batches.removeValue(forKey: source) ?? Data()
-            data.removeAll(keepingCapacity: true)
-            while mnt_ring_pop(ring, &packet) {
-                guard failure == nil else { continue }
-                do {
-                    withUnsafeBytes(of: packet.time) { data.append(contentsOf: $0) }
-                    withUnsafeBytes(of: packet.rate) { data.append(contentsOf: $0) }
-                    withUnsafeBytes(of: packet.count) { data.append(contentsOf: $0) }
-                    let packetTime = packet.time, packetRate = packet.rate, packetCount = Int(packet.count)
-                    withUnsafeMutablePointer(to: &packet) { pointer in
-                        let samples = UnsafeMutablePointer(mutating: mnt_packet_samples(pointer)!)
-                        let packetEnd = packetTime + Double(packetCount-1)/packetRate
-                        let overlaps = (pausedAt.map { packetEnd >= $0 } ?? false) || pauses.contains { packetEnd >= $0.0 && packetTime < $0.1 }
-                        let fullyPaused = (pausedAt.map { packetTime >= $0 } ?? false) || pauses.contains { packetTime >= $0.0 && packetEnd < $0.1 }
-                        if fullyPaused { samples.update(repeating: 0, count: packetCount) }
-                        else if overlaps {
-                            for i in 0..<packetCount {
-                                let time = packetTime + Double(i)/packetRate
-                                if (pausedAt.map { time >= $0 } ?? false) || pauses.contains(where: { time >= $0.0 && time < $0.1 }) { samples[i] = 0 }
-                            }
-                        }
-                        if metersEnabled {
-                            var packetPeak: Float = 0
-                            vDSP_maxmgv(samples, 1, &packetPeak, vDSP_Length(packetCount))
-                            peak = max(peak, packetPeak)
-                        }
-                        data.append(UnsafeRawPointer(samples).assumingMemoryBound(to: UInt8.self), count: packetCount*4)
-                    }
-                    // Bound batching memory even if callbacks keep filling the ring during a drain.
-                    if data.count >= 256*1024 {
-                        try handles[source]?.write(contentsOf: data)
-                        data.removeAll(keepingCapacity: true)
-                    }
-                } catch { failure = error }
-            }
-            if failure == nil && !data.isEmpty {
-                do { try handles[source]?.write(contentsOf: data) } catch { failure = error }
-            }
-            batches[source] = data
-            levels.append(peak)
-        }
-        let elapsed = AVAudioTime.seconds(forHostTime: mach_absolute_time()) - startHost
-        var free: Int64?
-        if elapsed-lastSync >= 5 {
-            lastSync = elapsed
-            free = (try? FileManager.default.attributesOfFileSystem(forPath: folder.path)[.systemFreeSize] as? NSNumber)?.int64Value
-            if let free, free < 128*1024*1024 { failure = MeetingError.message("Less than 128 MB of disk space remains. Recording stopped; saved chunks are recoverable.") }
-            do {
-                let syncStart = ProcessInfo.processInfo.systemUptime
-                for handle in handles.values { try handle.synchronize() }
-                // Force the heartbeat to stable storage with the audio checkpoint.
-                try journal?.append(.init(time: elapsed, message: "", kind: .heartbeat), synchronize: true)
-                let syncMilliseconds = Int((ProcessInfo.processInfo.systemUptime-syncStart)*1000)
-                if syncMilliseconds >= 100 {
-                    try journal?.append(.init(time: elapsed, message: "Audio checkpoint synchronization took \(syncMilliseconds) ms.", kind: .captureDiagnostic))
-                }
-            } catch { failure = error }
-        }
-        // A processed packet cannot arrive before its ring's previous packet. Retain
-        // only pause intervals that can still intersect delayed buffers (10 seconds).
-        pauses.removeAll { $0.1 < elapsed-10 }
-        meterPeaks[0] = max(meterPeaks[0], levels[0]); meterPeaks[1] = max(meterPeaks[1], levels[1])
-        if (metersEnabled && elapsed-lastMeterUpdate >= 0.1) || free != nil || failure != nil {
-            lastMeterUpdate = elapsed
-            onUpdate?(meterPeaks[0], meterPeaks[1], free, failure?.localizedDescription)
-            meterPeaks = [0, 0]
-        }
-    }
-    func stop(at time: Double) async throws -> [CaptureEvent] {
-        timer?.cancel(); timer = nil
-        return try await withCheckedThrowingContinuation { continuation in
-            queue.async {
-                self.drain(); self.append(.init(time: time, message: "Recording stopped.", kind: .stopped))
-                var closeError: Error?
-                for handle in self.handles.values { do { try handle.synchronize(); try handle.close() } catch { closeError = error } }
-                self.handles = [:]
-                do { try self.journal?.close() } catch { closeError = error }; self.journal = nil
-                if let error = self.failure ?? closeError { continuation.resume(throwing: error) }
-                else { continuation.resume(returning: self.events) }
-            }
-        }
-    }
 }
 
 /// All source lifecycle operations run on the capture-control executor. The realtime callbacks
@@ -287,11 +153,17 @@ final class CaptureWriter: @unchecked Sendable {
         writer.metersEnabled = metersEnabled
         discoveryDirty = true; lastDiscovery = -.infinity
         installDiscoveryListeners()
-        writer.onUpdate = { [weak self] mic, computer, free, error in
+        writer.onStorage = { [weak self] free in
+            Task { @CaptureControl in
+                guard let self, self.running else { return }
+                self.health.availableBytes = free
+                self.health.storageWarning = CaptureRecoveryPolicy.storageState(bytes: free)
+            }
+        }
+        writer.onUpdate = { [weak self] mic, computer, error in
             Task { @CaptureControl in
                 guard let self, self.running else { return }
                 if self.metersEnabled { self.onLevels?(mic, computer) }
-                if let free { self.health.availableBytes = free; self.health.storageWarning = CaptureRecoveryPolicy.storageState(bytes: free) }
                 if let error, !self.fatalReported { self.fatalReported = true; self.fatalError = error; self.onFatal?(error) }
             }
         }

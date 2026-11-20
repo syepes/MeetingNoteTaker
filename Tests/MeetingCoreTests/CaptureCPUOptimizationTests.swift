@@ -44,7 +44,7 @@ final class CaptureCPUOptimizationTests: XCTestCase {
         let writer = try CaptureWriter(rings: CaptureRings(), folder: root, startHost: AVAudioTime.seconds(forHostTime: mach_absolute_time())-1, session: nil)
         final class Counter: @unchecked Sendable { var value = 0 }
         let updates = Counter()
-        writer.onUpdate = { _, _, _, _ in updates.value += 1 }
+        writer.onUpdate = { _, _, _ in updates.value += 1 }
         writer.queue.sync {
             writer.drain(); XCTAssertEqual(updates.value, 0)
             writer.metersEnabled = true; writer.drain(); XCTAssertEqual(updates.value, 1)

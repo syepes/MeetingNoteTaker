@@ -3,15 +3,15 @@ import AVFoundation
 @testable import MeetingCore
 
 final class InMemoryTranscriptionTests: XCTestCase {
-    private func fixture(duration: Double = 26, silent: Bool = false, echo: Bool = false) async throws -> (MeetingSession, SessionStore) {
+    private func fixture(duration: Double = 26, silent: Bool = false, echo: Bool = false, sampleRate: Double = 16000) async throws -> (MeetingSession, SessionStore) {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
         var settings = AppSettings(); settings.outputFolder = folder.path; settings.echoReduction = echo
         let store = try SessionStore(root: folder.appendingPathComponent("metadata"))
         var session = try await store.reserve(settings: settings)
-        let format = AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 2)!
-        let count = Int(duration * 16000)
+        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2)!
+        let count = Int(duration * sampleRate)
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count))!
         buffer.frameLength = AVAudioFrameCount(count)
         for index in 0..<count {
@@ -19,7 +19,7 @@ final class InMemoryTranscriptionTests: XCTestCase {
             buffer.floatChannelData![1][index] = reference
             buffer.floatChannelData![0][index] = silent ? 0 : reference * 0.6 + Float(sin(Double(index) * 0.21)) * 0.1
         }
-        let file = try AVAudioFile(forWriting: session.audioURL, settings: [AVFormatIDKey: kAudioFormatAppleLossless, AVSampleRateKey: 16000, AVNumberOfChannelsKey: 2, AVEncoderBitDepthHintKey: 16], commonFormat: .pcmFormatFloat32, interleaved: false)
+        let file = try AVAudioFile(forWriting: session.audioURL, settings: [AVFormatIDKey: kAudioFormatAppleLossless, AVSampleRateKey: sampleRate, AVNumberOfChannelsKey: 2, AVEncoderBitDepthHintKey: 16], commonFormat: .pcmFormatFloat32, interleaved: false)
         try file.write(from: buffer)
         session.duration = duration; session.status = .recorded
         try await store.save(session)
@@ -44,6 +44,40 @@ final class InMemoryTranscriptionTests: XCTestCase {
         XCTAssertEqual(result.segments.map(\.start), [0, 0, 25, 25])
         XCTAssertEqual(result.status, .complete)
         XCTAssertTrue(provider.stopped)
+    }
+
+    func testStereoWindowsMatchSeparateReadsAtRecordingRate() async throws {
+        let (session, _) = try await fixture(duration: 26, sampleRate: 48000)
+        let reader = try AudioWindowReader(session.audioURL)
+        var separateSeconds = 0.0, stereoSeconds = 0.0
+        for (start, duration) in [(0.0, 25.0), (25.0, 1.0)] {
+            let before = ProcessInfo.processInfo.systemUptime
+            let independent = try [0, 1].map {
+                try AudioFiles.samples(session.audioURL, channel: $0, start: start, duration: duration)
+            }
+            let middle = ProcessInfo.processInfo.systemUptime
+            let shared = try reader.read(channels: [0, 1], start: start, duration: duration)
+            let after = ProcessInfo.processInfo.systemUptime
+            separateSeconds += middle - before
+            stereoSeconds += after - middle
+            XCTAssertEqual(shared[0], independent[0])
+            XCTAssertEqual(shared[1], independent[1])
+            XCTAssertNotEqual(shared[0], shared[1])
+        }
+        XCTAssertEqual(reader.windowsRead, 2)
+        print("STEREO_PREP separate_seconds=\(separateSeconds) shared_seconds=\(stereoSeconds)")
+    }
+
+    func testResumeMicrophoneWithCompletedComputerStillUsesEchoReference() async throws {
+        var (session, store) = try await fixture(duration: 1, echo: true)
+        session.completedChunks = ["computer-0"]
+        var mic = try AudioFiles.samples(session.audioURL, channel: 0, start: 0, duration: 1)
+        let computer = try AudioFiles.samples(session.audioURL, channel: 1, start: 0, duration: 1)
+        AudioFiles.reduceEcho(microphone: &mic, computer: computer)
+        let provider = MemorySpeech(staging: session.stagingURL)
+        _ = try await MeetingPipeline(speechFactory: { _ in provider }).transcribe(session, store: store, progress: { _ in })
+        XCTAssertEqual(provider.calls.map(\.source), [.microphone])
+        XCTAssertEqual(provider.calls.first?.samples, mic)
     }
 
     func testEchoReductionOccursBeforeMemoryDelivery() async throws {
