@@ -97,6 +97,15 @@ struct MeetingList: View {
                         VStack(alignment: .leading) { Text(session.stem).font(.title2.bold()); Text("\(MarkdownExporter.time(session.duration)) · \(session.speech.engine.title)").foregroundStyle(.secondary) }
                         Spacer()
                         Button("Open Markdown") { NSWorkspace.shared.open(session.markdownURL) }
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(session.markdownURL.path, forType: .string)
+                        } label: {
+                            Label("Copy Markdown path", systemImage: "doc.on.doc")
+                        }
+                        .labelStyle(.iconOnly)
+                        .help("Copy Markdown path")
+                        .accessibilityLabel("Copy Markdown path")
                         Button { NSWorkspace.shared.activateFileViewerSelecting([session.markdownURL]) } label: { Image(systemName: "folder") }
                         Button { deletionCandidate = session } label: {
                             Label(session.deletionRequestedAt == nil ? "Delete Meeting…" : "Retry deletion…", systemImage: "trash")

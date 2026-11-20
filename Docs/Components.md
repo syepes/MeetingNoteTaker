@@ -27,7 +27,11 @@ TranscriptionProvider and AnalysisProvider are the main inference extension poin
 
 Parakeet additionally implements `InMemoryTranscriptionProvider`, accepting mono 16 kHz floating-point samples with source, meeting offset and chunk duration. Its file entry point delegates to the same decoder-state and result-conversion path. Model preparation remains offline through `AsrModels.loadLocal`; downloads remain explicit model-management actions.
 
-FluidAudio is pinned to **0.18.2** (`e396cf780c4abf8e395087467c0585d3b0d17f68`) with `traits: []`. This excludes optional TTS, Diarizer and NeMo text-normalization code/resources while retaining ASR/VAD. Swift tools 6.2+ are required for dependency traits; the app retains Swift 5 language mode, Xcode 27 and the macOS 26 deployment target.
+FluidAudio is pinned to **0.18.4** (`e0c6103bc87a88d25276cad491c86e757f58c865`) with `traits: []`. This excludes optional TTS, Diarizer and NeMo text-normalization code/resources while retaining ASR/VAD. Swift tools 6.2+ are required for dependency traits; the app retains Swift 5 language mode, Xcode 27 and the macOS 26 deployment target.
+
+The 0.18.4 upgrade retains the existing Parakeet APIs, decoder state, gap repair and timing configuration. Upstream now flushes pending punctuation when an internal recognition window ends in a pause, and explicit model downloads validate missing compiled programs and weights before loading cached bundles. Local preparation still uses `loadLocal` and never downloads repairs. The new resampler setting does not change our pipeline: both app entry points already supply prepared mono 16 kHz samples. Nemotron, Cohere, TTS and diarization improvements are not enabled or claimed as app performance improvements. See the [upstream release](https://github.com/FluidInference/FluidAudio/releases/tag/v0.18.4).
+
+The Meetings document actions include an icon-only **Copy Markdown path** button between Open Markdown and Show in Finder. It copies the selected document’s full filesystem path as plain text, with a tooltip and accessibility label.
 
 ## Change and validation guide
 
