@@ -132,7 +132,10 @@ final class CaptureWriter: @unchecked Sendable {
 
     var onStorage: (@Sendable (Int64) -> Void)?
     func drain() {
-        let elapsed = AVAudioTime.seconds(forHostTime: mach_absolute_time()) - startHost
+        drain(at: AVAudioTime.seconds(forHostTime: mach_absolute_time()) - startHost)
+    }
+
+    func drain(at elapsed: Double) {
         var levels: [Float] = []
         for (source, ring) in [(AudioSource.microphone, rings.mic), (.computer, rings.computer)] {
             var packet = MNTPacket(); var peak: Float = 0

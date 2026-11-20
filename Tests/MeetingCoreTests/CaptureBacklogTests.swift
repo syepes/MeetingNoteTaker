@@ -34,14 +34,20 @@ final class CaptureBacklogTests: XCTestCase {
             _ = NSApplication.shared
             return (NSPanel(), NSWindow())
         }
+        let releaseDisk = DispatchSemaphore(value: 0)
+        defer { releaseDisk.signal() } // Also unblock the writer if the test throws.
+        let minimumStall = expectation(description: "two seconds of stalled storage")
         let stallEnded = DispatchSemaphore(value: 0)
         let entered = expectation(description: "disk queue stalled")
         writer.diskQueue.async {
             entered.fulfill()
             Thread.sleep(forTimeInterval: 2)
+            minimumStall.fulfill()
+            // CI window presentation can outlast the minimum injected delay.
+            XCTAssertEqual(releaseDisk.wait(timeout: .now() + 30), .success, "Timed out waiting for Stop during the stall")
             stallEnded.signal()
         }
-        await fulfillment(of: [entered], timeout: 1)
+        await fulfillment(of: [entered], timeout: 5)
         let meters = expectation(description: "meter updates during stall")
         meters.expectedFulfillmentCount = 5
         meters.assertForOverFulfill = false
@@ -66,15 +72,19 @@ final class CaptureBacklogTests: XCTestCase {
         }
         let p95 = latency.sorted()[Int(Double(ticks - 1) * 0.95)]
         XCTAssertLessThan(p95, 100)
+        await fulfillment(of: [minimumStall, meters], timeout: 5)
         let before = try CaptureEventJournal.replay(session.stagingURL)
         XCTAssertFalse(before.contains { $0.kind == .heartbeat })
-        let stop = await MainActor.run {
-            Task { try await writer.stop(at: Double(ticks) * 0.03 + 5) }
+        let stopRequested = expectation(description: "Stop dispatched on main actor")
+        let stop = Task { @MainActor in
+            stopRequested.fulfill()
+            return try await writer.stop(at: Double(ticks) * 0.03 + 5)
         }
+        await fulfillment(of: [stopRequested], timeout: 5)
         // Both button dispatch and further main-actor work complete before disk unblocks.
         await MainActor.run { XCTAssertEqual(stallEnded.wait(timeout: .now()), .timedOut) }
+        releaseDisk.signal()
         _ = try await stop.value
-        await fulfillment(of: [meters], timeout: 1)
         for source in AudioSource.allCases {
             let reader = try PacketReader(session.stagingURL.appendingPathComponent(source.rawValue + ".packets"))
             for tick in 0..<ticks {
@@ -88,8 +98,22 @@ final class CaptureBacklogTests: XCTestCase {
         let after = try CaptureEventJournal.replay(session.stagingURL)
         XCTAssertTrue(after.contains { $0.kind == .heartbeat })
         XCTAssertEqual(after.last?.kind, .stopped)
-        XCTAssertLessThanOrEqual(writer.audioWriteCount, ticks * 2 / 4)
-        print("CAPTURE_STALL baseline_writes=\(ticks * 2) batched_writes=\(writer.audioWriteCount) main_p95_ms=\(p95)")
+        print("CAPTURE_STALL main_p95_ms=\(p95)")
+    }
+
+    func testSteadyCaptureReducesAudioWritesByAtLeast75Percent() async throws {
+        let (_, writer) = try fixture()
+        let ticks = 45
+        // Drive the same 30 ms cadence independently of window-server and runner load.
+        for tick in 0..<ticks {
+            push(writer, tick: tick)
+            writer.queue.sync { writer.drain(at: Double(tick + 1) * 0.03) }
+        }
+        _ = try await writer.stop(at: Double(ticks) * 0.03)
+        let unbatchedWrites = ticks * 2
+        XCTAssertGreaterThan(writer.audioWriteCount, 0)
+        XCTAssertLessThanOrEqual(writer.audioWriteCount, unbatchedWrites / 4)
+        print("CAPTURE_BATCH baseline_writes=\(unbatchedWrites) batched_writes=\(writer.audioWriteCount)")
     }
 
     func testOverflowReportsOnceAndPreservesBufferedPrefix() async throws {
